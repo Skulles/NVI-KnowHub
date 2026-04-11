@@ -1,4 +1,8 @@
 import type { PlatformBridge } from './index'
+import {
+  formatFailedFetchError,
+  NETWORK_FETCH_FAILED_MESSAGE,
+} from './formatFailedFetchError'
 
 function toArrayBuffer(payload: Uint8Array) {
   const copy = new Uint8Array(payload.byteLength)
@@ -13,9 +17,14 @@ export function createWebPlatformBridge(): PlatformBridge {
       window.open(url, '_blank', 'noopener,noreferrer')
     },
     async downloadBinary(url, options) {
-      const response = await fetch(url, {
-        headers: options?.headers,
-      })
+      let response
+      try {
+        response = await fetch(url, {
+          headers: options?.headers,
+        })
+      } catch {
+        throw new Error(NETWORK_FETCH_FAILED_MESSAGE)
+      }
 
       if (!response.ok) {
         throw new Error(`Failed to download snapshot: ${response.status}`)
@@ -58,30 +67,42 @@ export function createWebPlatformBridge(): PlatformBridge {
       return bytes
     },
     async requestJson(url, init) {
-      const response = await fetch(url, init)
+      let response
+      try {
+        response = await fetch(url, init)
+      } catch {
+        throw new Error(NETWORK_FETCH_FAILED_MESSAGE)
+      }
+      const text = await response.text()
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${url}`)
+        throw new Error(formatFailedFetchError(response.status, url, text))
       }
 
       if (response.status === 204) {
         return undefined as never
       }
 
-      return (await response.json()) as never
+      return (text ? JSON.parse(text) : null) as never
     },
     async uploadBinary(url, payload, init) {
-      const response = await fetch(url, {
-        method: init?.method ?? 'POST',
-        headers: init?.headers,
-        body: toArrayBuffer(payload),
-      })
+      let response
+      try {
+        response = await fetch(url, {
+          method: init?.method ?? 'POST',
+          headers: init?.headers,
+          body: toArrayBuffer(payload),
+        })
+      } catch {
+        throw new Error(NETWORK_FETCH_FAILED_MESSAGE)
+      }
+      const text = await response.text()
 
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.status}`)
+        throw new Error(formatFailedFetchError(response.status, url, text))
       }
 
-      return (await response.json()) as {
+      return (text ? JSON.parse(text) : null) as {
         browser_download_url: string
         name: string
       }

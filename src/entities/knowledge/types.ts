@@ -30,6 +30,8 @@ export type DraftStatus = 'active' | 'orphaned'
 
 export type ArticleDraft = {
   articleId: string
+  /** Slug в URL; нужен для навигации к «осиротевшим» черновикам после обновления базы */
+  slug?: string
   title: string
   summary: string
   contentJson: string

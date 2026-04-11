@@ -8,17 +8,22 @@ import {
   decodeArticleSlugParam,
 } from '../../shared/lib/routing/articlePath'
 
+export type ArticleLocalChangeKind = 'added' | 'edited' | 'deleted'
+
 type NavigationTreeProps = {
   sections: KnowledgeSection[]
   articles: KnowledgeArticleSummary[]
-  /** Черновик или локально созданная статья, ещё не в опубликованном релизе */
-  unpublishedArticleIds?: ReadonlySet<string>
+  /** Локальные изменения относительно опубликованного релиза: добавлено / правки / удалено из snapshot */
+  articleLocalChangeKind?: Readonly<Record<string, ArticleLocalChangeKind>>
+  /** Не подсвечивать активную статью (например, открыта форма создания поста). */
+  muteActiveHighlight?: boolean
 }
 
 export function NavigationTree({
   sections,
   articles,
-  unpublishedArticleIds,
+  articleLocalChangeKind,
+  muteActiveHighlight,
 }: NavigationTreeProps) {
   const location = useLocation()
   const routeMatch = matchPath('/article/:slug', location.pathname)
@@ -42,28 +47,52 @@ export function NavigationTree({
           <ul>
             {section.articles.map((article) => {
               const to = articlePath(article.slug)
-              const isActive = routeSlug === article.slug
+              const isActive =
+                !muteActiveHighlight && routeSlug === article.slug
 
-              const showUnpublishedDot =
-                unpublishedArticleIds?.has(article.id) ?? false
+              const changeKind = articleLocalChangeKind?.[article.id]
+              const dotClass =
+                changeKind === 'added'
+                  ? 'navigation-tree__draft-dot navigation-tree__draft-dot--added'
+                  : changeKind === 'deleted'
+                    ? 'navigation-tree__draft-dot navigation-tree__draft-dot--deleted'
+                    : changeKind === 'edited'
+                      ? 'navigation-tree__draft-dot navigation-tree__draft-dot--edited'
+                      : null
+
+              const dotTitle =
+                changeKind === 'added'
+                  ? 'Статья добавлена локально, ещё не в опубликованном релизе'
+                  : changeKind === 'edited'
+                    ? 'Есть несохранённые в релиз правки (черновик)'
+                    : changeKind === 'deleted'
+                      ? 'Статья удалена из актуального snapshot, черновик сохранён локально'
+                      : undefined
+
+              const dotHidden =
+                changeKind === 'added'
+                  ? ', добавлена локально, не в общей базе'
+                  : changeKind === 'edited'
+                    ? ', есть локальный черновик'
+                    : changeKind === 'deleted'
+                      ? ', статья удалена из snapshot, черновик только локально'
+                      : ''
 
               return (
                 <li key={article.id}>
                   <Link className={isActive ? 'active' : ''} to={to}>
                     <span className="navigation-tree__link-row">
-                      {showUnpublishedDot ? (
+                      {dotClass ? (
                         <span
                           aria-hidden
-                          className="navigation-tree__draft-dot"
-                          title="Локальные правки или статья ещё не опубликована в релиз"
+                          className={dotClass}
+                          title={dotTitle}
                         />
                       ) : null}
                       <span className="navigation-tree__link-text">
                         {article.title}
-                        {showUnpublishedDot ? (
-                          <span className="visually-hidden">
-                            , не опубликовано в общей базе (черновик или новая статья)
-                          </span>
+                        {dotClass ? (
+                          <span className="visually-hidden">{dotHidden}</span>
                         ) : null}
                       </span>
                     </span>

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
+import { createPortal } from 'react-dom'
 import {
   BrowserRouter,
   HashRouter,
@@ -7,6 +15,7 @@ import {
   Route,
   Routes,
   matchPath,
+  resolvePath,
   useLocation,
   useNavigate,
 } from 'react-router-dom'
@@ -15,6 +24,7 @@ import { AddArticleForm } from './features/article/AddArticleForm'
 import { ArticleView } from './features/article/ArticleView'
 import { NavigationTree } from './features/navigation/NavigationTree'
 import { SettingsPanel } from './features/settings/SettingsPanel'
+import { UpdateSnapshotDialog } from './features/settings/UpdateSnapshotDialog'
 import type {
   ApplySnapshotUpdateInput,
   ArticleDraft,
@@ -29,12 +39,88 @@ import {
   getReleaseSourceSettings,
   isReleaseSourceConfigured,
 } from './shared/config/releaseSource'
-import { knowledgeBase } from './shared/lib/content/knowledge'
+import { knowledgeBase, slugifyArticleTitle } from './shared/lib/content/knowledge'
 import {
   articlePath,
   decodeArticleSlugParam,
 } from './shared/lib/routing/articlePath'
 import { useAppStore } from './shared/state/appStore'
+import { useFormErrorToast } from './shared/hooks/useFormErrorToast'
+
+/**
+ * Путь приложения из `href` ссылки (Browser или Hash router, абсолютные URL того же origin).
+ * Возвращает null, если переход не из SPA (внешняя ссылка и т.п.).
+ */
+function appPathnameFromHref(
+  href: string,
+  currentPathname: string,
+): string | null {
+  const trimmed = href.trim()
+  if (
+    !trimmed ||
+    trimmed.startsWith('javascript:') ||
+    trimmed.startsWith('mailto:') ||
+    trimmed.startsWith('tel:')
+  ) {
+    return null
+  }
+  if (trimmed.startsWith('#')) {
+    const raw = trimmed.slice(1)
+    const pathOnly = raw.split('?')[0] || '/'
+    return pathOnly.startsWith('/') ? pathOnly : `/${pathOnly}`
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const u = new URL(trimmed)
+      if (u.origin !== window.location.origin) {
+        return null
+      }
+      return u.pathname || '/'
+    } catch {
+      return null
+    }
+  }
+  try {
+    return resolvePath(trimmed, currentPathname).pathname
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Цель клика как Element (при клике по тексту внутри `<a>` target часто Text, не Element).
+ */
+function clickTargetElement(target: EventTarget | null): Element | null {
+  if (!target || target === window) {
+    return null
+  }
+  if (target instanceof Element) {
+    return target
+  }
+  if (target instanceof Text) {
+    return target.parentElement
+  }
+  return null
+}
+
+function draftSlugForNav(draft: ArticleDraft): string {
+  return draft.slug?.trim() || slugifyArticleTitle(draft.title)
+}
+
+function findOrphanDraftBySlug(
+  slug: string,
+  draftMap: Record<string, ArticleDraft>,
+): ArticleDraft | null {
+  for (const d of Object.values(draftMap)) {
+    if (d.status !== 'orphaned') {
+      continue
+    }
+    if (draftSlugForNav(d) === slug) {
+      return d
+    }
+  }
+  return null
+}
 
 function App() {
   const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter
@@ -50,10 +136,10 @@ function WorkspaceApp() {
   const location = useLocation()
   const navigate = useNavigate()
   const {
-    moderatorMode,
+    editorMode,
     editorOpen,
     audience,
-    setModeratorMode,
+    setEditorMode,
     setEditorOpen,
     setAudience,
   } = useAppStore()
@@ -81,8 +167,16 @@ function WorkspaceApp() {
   const [updateState, setUpdateState] = useState<UpdateCheckResult | null>(null)
   const [publishState, setPublishState] = useState<PublishSnapshotResult | null>(null)
   const [addArticleOpen, setAddArticleOpen] = useState(false)
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
+  const startupUpdateCheckDoneRef = useRef(false)
+  const knowledgeImportInputRef = useRef<HTMLInputElement>(null)
+  const articleSlugPrevRef = useRef<string | null>(null)
+  const [articleRouteLoading, setArticleRouteLoading] = useState(false)
 
-  const releaseSource = getReleaseSourceSettings()
+  const { toast: navBlockedToast, showErrorToast: showNavigationBlockedToast } =
+    useFormErrorToast()
+
+  const releaseSource = useMemo(() => getReleaseSourceSettings(), [])
   const releaseSourceConfigured = isReleaseSourceConfigured(releaseSource)
 
   const slugMatch = matchPath('/article/:slug', location.pathname)
@@ -91,11 +185,107 @@ function WorkspaceApp() {
     : null
   const currentDraft = activeArticle ? drafts[activeArticle.id] ?? null : null
 
-  const sidebarUnpublishedArticleIds = useMemo(() => {
-    const ids = new Set<string>(Object.keys(drafts))
-    pendingLocalArticleIds.forEach((id) => ids.add(id))
-    return ids
+  const editorBlocking =
+    editorMode &&
+    (addArticleOpen || Boolean(editorOpen && activeArticle))
+
+  const onSidebarNavClickCapture = useCallback(
+    (e: ReactMouseEvent) => {
+      if (!editorBlocking) {
+        return
+      }
+      const el = clickTargetElement(e.target)
+      if (!el) {
+        return
+      }
+      const a = el.closest('a[href]')
+      if (!a || !(a instanceof HTMLAnchorElement)) {
+        return
+      }
+      if (a.target === '_blank' || a.hasAttribute('download')) {
+        return
+      }
+      const href = a.getAttribute('href')
+      if (!href) {
+        return
+      }
+      const nextPath = appPathnameFromHref(href, location.pathname)
+      if (nextPath == null) {
+        return
+      }
+      // Не сравниваем с текущим URL: при создании поста с /settings повторный клик по
+      // «Настройки» ведёт на тот же путь — всё равно нужно напомнить про черновик.
+      e.preventDefault()
+      e.stopPropagation()
+      showNavigationBlockedToast(
+        'Сначала сохраните или отмените редактирование',
+      )
+    },
+    [editorBlocking, location.pathname, showNavigationBlockedToast],
+  )
+
+  const navigationArticles = useMemo(() => {
+    const ids = new Set(articles.map((a) => a.id))
+    const extra: KnowledgeArticleSummary[] = []
+    const defaultSectionId = sections[0]?.id
+    for (const d of Object.values(drafts)) {
+      if (d.status !== 'orphaned' || ids.has(d.articleId)) {
+        continue
+      }
+      const sectionId = d.sectionId ?? defaultSectionId
+      if (!sectionId) {
+        continue
+      }
+      extra.push({
+        id: d.articleId,
+        sectionId,
+        slug: draftSlugForNav(d),
+        title: d.title,
+        summary: d.summary,
+        updatedAt: d.updatedAt,
+        forBu: d.forBu ?? true,
+        forTkrs: d.forTkrs ?? true,
+      })
+    }
+    return [...articles, ...extra]
+  }, [articles, drafts, sections])
+
+  const articleLocalChangeKind = useMemo(() => {
+    const m: Record<string, 'added' | 'edited' | 'deleted'> = {}
+    for (const [id, d] of Object.entries(drafts)) {
+      if (d.status === 'orphaned') {
+        m[id] = 'deleted'
+      } else if (!pendingLocalArticleIds.has(id)) {
+        m[id] = 'edited'
+      }
+    }
+    for (const id of pendingLocalArticleIds) {
+      m[id] = 'added'
+    }
+    return m
   }, [drafts, pendingLocalArticleIds])
+
+  const orphanArticleFromDraft = useCallback(
+    (draft: ArticleDraft, slug: string): KnowledgeArticle | null => {
+      const sectionId = draft.sectionId ?? sections[0]?.id
+      if (!sectionId) {
+        return null
+      }
+      return {
+        id: draft.articleId,
+        sectionId,
+        slug,
+        title: draft.title,
+        summary: draft.summary,
+        contentJson: draft.contentJson,
+        contentText: draft.contentText,
+        updatedAt: draft.updatedAt,
+        forBu: draft.forBu ?? true,
+        forTkrs: draft.forTkrs ?? true,
+      }
+    },
+    [sections],
+  )
 
   const loadWorkspace = useCallback(async () => {
     const [
@@ -153,25 +343,46 @@ function WorkspaceApp() {
     }
     if (!currentSlug) {
       setActiveArticle(null)
+      setArticleRouteLoading(false)
+      articleSlugPrevRef.current = null
       return
     }
 
-    void knowledgeBase.getArticleBySlug(currentSlug).then((article) => {
-      setActiveArticle(article)
-    })
-  }, [currentSlug, drafts, isBooting, snapshotMeta.version])
+    const slugChanged = articleSlugPrevRef.current !== currentSlug
+    articleSlugPrevRef.current = currentSlug
 
-  useEffect(() => {
-    if (location.pathname === '/settings') {
-      setEditorOpen(false)
+    if (slugChanged) {
+      setArticleRouteLoading(true)
+      setActiveArticle(null)
     }
-  }, [location.pathname, setEditorOpen])
+
+    let cancelled = false
+
+    void knowledgeBase.getArticleBySlug(currentSlug).then((article) => {
+      if (cancelled) {
+        return
+      }
+      if (article) {
+        setActiveArticle(article)
+        setArticleRouteLoading(false)
+        return
+      }
+      const orphan = findOrphanDraftBySlug(currentSlug, drafts)
+      const synthetic = orphan ? orphanArticleFromDraft(orphan, currentSlug) : null
+      setActiveArticle(synthetic)
+      setArticleRouteLoading(false)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentSlug, drafts, isBooting, snapshotMeta.version, orphanArticleFromDraft])
 
   useEffect(() => {
-    if (!moderatorMode) {
+    if (!editorMode) {
       setAddArticleOpen(false)
     }
-  }, [moderatorMode])
+  }, [editorMode])
 
   useEffect(() => {
     if (isBooting) {
@@ -249,22 +460,50 @@ function WorkspaceApp() {
     [loadWorkspace, activeArticle?.id, audience, navigate, setEditorOpen],
   )
 
-  async function handleCheckUpdates() {
-    setIsCheckingUpdates(true)
+  const handleCheckUpdates = useCallback(
+    async (options?: { resetState?: boolean }) => {
+      const resetState = options?.resetState !== false
+      setIsCheckingUpdates(true)
+      if (resetState) {
+        setUpdateState(null)
+      }
 
-    try {
-      const result = await knowledgeBase.checkForUpdates(releaseSource)
-      setUpdateState(result)
-    } catch (error) {
-      setUpdateState({
-        status: 'not-configured',
-        message:
-          error instanceof Error ? error.message : 'Не удалось проверить обновления.',
-      })
-    } finally {
-      setIsCheckingUpdates(false)
+      try {
+        const result = await knowledgeBase.checkForUpdates(releaseSource)
+        setUpdateState(result)
+      } catch (error) {
+        setUpdateState({
+          status: 'not-configured',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Не удалось проверить обновления.',
+        })
+      } finally {
+        setIsCheckingUpdates(false)
+      }
+    },
+    [releaseSource],
+  )
+
+  const openUpdateDialogFromSettings = useCallback(() => {
+    setUpdateDialogOpen(true)
+    void handleCheckUpdates({ resetState: true })
+  }, [handleCheckUpdates])
+
+  useEffect(() => {
+    if (isBooting || !releaseSourceConfigured) {
+      return
     }
-  }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return
+    }
+    if (startupUpdateCheckDoneRef.current) {
+      return
+    }
+    startupUpdateCheckDoneRef.current = true
+    void handleCheckUpdates({ resetState: false })
+  }, [isBooting, releaseSourceConfigured, handleCheckUpdates])
 
   async function handleApplyUpdate(payload: {
     downloadUrl: string
@@ -307,6 +546,7 @@ function WorkspaceApp() {
         message:
           error instanceof Error ? error.message : 'Не удалось применить обновление.',
       })
+      throw error
     } finally {
       setIsApplyingUpdate(false)
     }
@@ -319,7 +559,7 @@ function WorkspaceApp() {
   }) {
     if (!releaseSourceConfigured) {
       throw new Error(
-        'Источник публикации не задан: задайте переменные VITE_GITHUB_* при сборке.',
+        'Источник публикации не задан',
       )
     }
     const result = await knowledgeBase.publishSnapshot({
@@ -377,33 +617,64 @@ function WorkspaceApp() {
     }
   }
 
+  const showUpdateBanner =
+    releaseSourceConfigured &&
+    updateState?.status === 'update-available' &&
+    Boolean(updateState.assetUrl)
+
   if (isBooting) {
     return (
-      <div className="boot-screen">
-        <div className="boot-card">
-          <h1>Поднимаю локальную базу знаний</h1>
-          <p>
-            Инициализируется SQLite snapshot
-          </p>
+      <div
+        aria-busy="true"
+        aria-live="polite"
+        className="boot-screen"
+        role="status"
+      >
+        <div aria-hidden className="boot-loader">
+          <div className="boot-loader__spinner" />
         </div>
+        <span className="visually-hidden">Загрузка базы знаний</span>
       </div>
     )
   }
 
+  const settingsNavActive = location.pathname === '/settings' && !addArticleOpen
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div
+      className={
+        showUpdateBanner ? 'app-shell app-shell--update-banner' : 'app-shell'
+      }
+    >
+      {showUpdateBanner && updateState?.status === 'update-available' ? (
+        <div className="update-available-banner" role="status">
+          <p className="update-available-banner__text">
+            Доступна новая версия базы{' '}
+            
+          </p>
+          <div className="update-available-banner__actions">
+            <button
+              className="primary-button update-available-banner__btn"
+              type="button"
+              onClick={() => setUpdateDialogOpen(true)}
+            >
+              Обновить
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <aside className="sidebar" onClickCapture={onSidebarNavClickCapture}>
         <header className="sidebar-header">
           <div className="sidebar-header__titles">
+           
+            <h1 className="sidebar-title">БАЗА ЗНАНИЙ</h1>
             <p className="app-eyebrow">сервисная служба</p>
-            <h1 className="sidebar-title">KnowHub</h1>
           </div>
           <Link
             aria-label="Настройки"
             className={
-              location.pathname === '/settings'
-                ? 'sidebar-settings is-active'
-                : 'sidebar-settings'
+              settingsNavActive ? 'sidebar-settings is-active' : 'sidebar-settings'
             }
             title="Настройки"
             to="/settings"
@@ -412,7 +683,7 @@ function WorkspaceApp() {
           </Link>
         </header>
 
-        {moderatorMode ? (
+        {editorMode ? (
           <button
             className="sidebar-add-article"
             type="button"
@@ -429,14 +700,15 @@ function WorkspaceApp() {
 
         <div className="sidebar-scroll">
           <NavigationTree
-            articles={articles}
-            unpublishedArticleIds={sidebarUnpublishedArticleIds}
+            articleLocalChangeKind={articleLocalChangeKind}
+            articles={navigationArticles}
+            muteActiveHighlight={addArticleOpen}
             sections={sections}
           />
         </div>
       </aside>
 
-      {moderatorMode && addArticleOpen ? (
+      {editorMode && addArticleOpen ? (
         <AddArticleForm
           key="create-article"
           defaultAudience={audience}
@@ -451,7 +723,7 @@ function WorkspaceApp() {
         />
       ) : null}
 
-      {moderatorMode && editorOpen && activeArticle ? (
+      {editorMode && editorOpen && activeArticle ? (
         <AddArticleForm
           key={`edit-${activeArticle.id}`}
           article={activeArticle}
@@ -466,19 +738,36 @@ function WorkspaceApp() {
       ) : null}
 
       <main className="main-column">
+        <input
+          ref={knowledgeImportInputRef}
+          accept=".sqlite,application/octet-stream,application/x-sqlite3"
+          aria-label="Выбор файла локальной базы (.sqlite)"
+          className="visually-hidden"
+          tabIndex={-1}
+          type="file"
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (file) {
+              void handleImportSnapshot(file)
+            }
+          }}
+        />
         <Routes>
           <Route
             path="/"
             element={
-              articles[0] ? (
-                <Navigate replace to={articlePath(articles[0].slug)} />
+              navigationArticles[0] ? (
+                <Navigate replace to={articlePath(navigationArticles[0].slug)} />
               ) : (
-                <section className="empty-state">
-                  <h2>Нет материалов</h2>
-                  <p>
-                    В выбранном контуре статей нет. Переключите «БУРОВАЯ / ТКРС» или
-                    обновите базу знаний.
-                  </p>
+                <section className="empty-state empty-state--knowledge-import">
+                  <button
+                    className="primary-button empty-state__import-btn"
+                    type="button"
+                    onClick={() => knowledgeImportInputRef.current?.click()}
+                  >
+                    Импортировать локальную базу
+                  </button>
                 </section>
               )
             }
@@ -489,8 +778,9 @@ function WorkspaceApp() {
               <ArticleView
                 activeAudience={audience}
                 article={activeArticle}
+                articleRouteLoading={articleRouteLoading}
                 draft={currentDraft}
-                moderatorMode={moderatorMode}
+                editorMode={editorMode}
                 onOpenEditor={() => {
                   setAddArticleOpen(false)
                   setEditorOpen(true)
@@ -502,17 +792,12 @@ function WorkspaceApp() {
             path="/settings"
             element={
               <SettingsPanel
-                releaseSource={releaseSource}
                 releaseSourceConfigured={releaseSourceConfigured}
                 snapshotMeta={snapshotMeta}
-                moderatorMode={moderatorMode}
+                editorMode={editorMode}
                 publishState={publishState}
-                updateState={updateState}
-                isCheckingUpdates={isCheckingUpdates}
-                isApplyingUpdate={isApplyingUpdate}
-                onModeratorModeChange={setModeratorMode}
-                onCheckUpdates={() => void handleCheckUpdates()}
-                onApplyUpdate={handleApplyUpdate}
+                onEditorModeChange={setEditorMode}
+                onOpenUpdateDialog={openUpdateDialogFromSettings}
                 onPublishSnapshot={handlePublishSnapshot}
                 onExportSnapshot={handleExportSnapshot}
                 onImportSnapshot={(file) => void handleImportSnapshot(file)}
@@ -531,6 +816,27 @@ function WorkspaceApp() {
         </Routes>
       </main>
 
+      <UpdateSnapshotDialog
+        open={updateDialogOpen}
+        onClose={() => setUpdateDialogOpen(false)}
+        isApplyingUpdate={isApplyingUpdate}
+        isCheckingUpdates={isCheckingUpdates}
+        updateState={updateState}
+        onApplyUpdate={handleApplyUpdate}
+      />
+
+      {createPortal(
+        navBlockedToast ? (
+          <div
+            aria-live="assertive"
+            className={`form-error-toast${navBlockedToast.variant === 'success' ? ' form-error-toast--success' : ''}${navBlockedToast.open ? ' form-error-toast--open' : ''}`}
+            role="alert"
+          >
+            {navBlockedToast.message}
+          </div>
+        ) : null,
+        document.body,
+      )}
     </div>
   )
 }

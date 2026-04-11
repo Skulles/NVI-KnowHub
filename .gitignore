@@ -23,3 +23,6 @@ release
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets — не коммитить (токены GitHub и т.д.)
+.env

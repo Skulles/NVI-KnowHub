@@ -1,12 +1,12 @@
-import Image from '@tiptap/extension-image'
 import { TableKit } from '@tiptap/extension-table'
+import { ArticleImage } from './articleImageExtension'
 import { Callout } from './calloutExtension'
 import { LocalVideo } from './localVideoExtension'
 
 /** Общие узлы для тела статьи: редактор блоков и `generateHTML` в knowledge. */
 export function articleBodyNodeExtensions() {
   return [
-    Image.configure({
+    ArticleImage.configure({
       allowBase64: true,
       HTMLAttributes: { class: 'article-body-img' },
     }),

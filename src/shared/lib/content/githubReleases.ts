@@ -66,6 +66,9 @@ async function getReleaseByTag(
   }
 }
 
+const RELEASE_422_HINT =
+  'Если репозиторий пустой (нет ни одного коммита), GitHub не может создать тег для релиза. Добавьте любой файл (например README.md), сделайте commit и push в основную ветку (обычно main или master), затем повторите публикацию.'
+
 async function createRelease(
   bridge: PlatformBridge,
   settings: GitHubReleaseSettings,
@@ -73,22 +76,30 @@ async function createRelease(
   releaseNotes: string | undefined,
   token: string,
 ) {
-  return bridge.requestJson<GitHubRelease>(
-    `${apiBase(settings)}/releases`,
-    {
-      method: 'POST',
-      headers: withAuthHeaders(token, {
-        'Content-Type': 'application/json',
-      }),
-      body: JSON.stringify({
-        tag_name: tag,
-        name: tag,
-        body: releaseNotes?.trim() || `Snapshot ${tag}`,
-        draft: false,
-        prerelease: false,
-      }),
-    },
-  )
+  try {
+    return await bridge.requestJson<GitHubRelease>(
+      `${apiBase(settings)}/releases`,
+      {
+        method: 'POST',
+        headers: withAuthHeaders(token, {
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({
+          tag_name: tag,
+          name: tag,
+          body: releaseNotes?.trim() || `Snapshot ${tag}`,
+          draft: false,
+          prerelease: false,
+        }),
+      },
+    )
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    if (msg.includes('HTTP 422')) {
+      throw new Error(`${msg}\n\n${RELEASE_422_HINT}`)
+    }
+    throw error
+  }
 }
 
 export async function getOrCreateRelease(

@@ -39,6 +39,43 @@ function parseBodyDoc(json: string): JSONContent {
   return EMPTY_BODY_DOC
 }
 
+function getMediaContextTarget(
+  editor: Editor,
+  clientX: number,
+  clientY: number,
+): { type: 'image' | 'video'; pos: number } | null {
+  const root = editor.view.dom
+  const el = document.elementFromPoint(clientX, clientY)
+  if (!el || !root.contains(el)) {
+    return null
+  }
+  const media = el.closest('img, video')
+  if (!media || !root.contains(media)) {
+    return null
+  }
+  const isArticleImg =
+    media.tagName === 'IMG' && media.classList.contains('article-body-img')
+  const isArticleVideo =
+    media.tagName === 'VIDEO' && media.classList.contains('article-body-video')
+  if (!isArticleImg && !isArticleVideo) {
+    return null
+  }
+  try {
+    const pos = editor.view.posAtDOM(media, 0)
+    const node = editor.state.doc.nodeAt(pos)
+    if (
+      node &&
+      ((isArticleImg && node.type.name === 'image') ||
+        (isArticleVideo && node.type.name === 'video'))
+    ) {
+      return { type: node.type.name as 'image' | 'video', pos }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
 function CtxIcon({ children }: { children: ReactNode }) {
   return (
     <span className="block-body-context-menu__ico" aria-hidden>
@@ -139,11 +176,16 @@ function BlockBubbleToolbar({ editor }: { editor: Editor }) {
 type BlockBodyContextMenuProps = {
   editor: Editor
   position: { x: number; y: number }
+  mediaTarget: { type: 'image' | 'video'; pos: number } | null
   onClose: () => void
+  onRequestMediaCaption: (target: { type: 'image' | 'video'; pos: number }) => void
 }
 
 const BlockBodyContextMenu = forwardRef<HTMLDivElement, BlockBodyContextMenuProps>(
-  function BlockBodyContextMenu({ editor, position, onClose }, ref) {
+  function BlockBodyContextMenu(
+    { editor, position, mediaTarget, onClose, onRequestMediaCaption },
+    ref,
+  ) {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const videoInputRef = useRef<HTMLInputElement>(null)
 
@@ -190,6 +232,34 @@ const BlockBodyContextMenu = forwardRef<HTMLDivElement, BlockBodyContextMenuProp
     },
     [editor, onClose],
   )
+
+  if (mediaTarget) {
+    return (
+      <div
+        ref={ref}
+        className="block-body-context-menu"
+        role="toolbar"
+        aria-label="Медиа"
+        style={{ left: position.x, top: position.y }}
+      >
+        <button
+          className="block-body-context-menu__btn block-body-context-menu__btn--text"
+          type="button"
+          title="Подпись под изображением или видео"
+          onMouseDown={(ev) => {
+            ev.preventDefault()
+            ev.stopPropagation()
+          }}
+          onClick={() => {
+            onRequestMediaCaption(mediaTarget)
+            onClose()
+          }}
+        >
+          Подпись
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -371,13 +441,27 @@ type BlockBodyEditorProps = {
   onChange: (json: string) => void
 }
 
+type MediaCaptionDialogState = {
+  pos: number
+  type: 'image' | 'video'
+  value: string
+}
+
 export function BlockBodyEditor({
   blockId,
   valueJson,
   onChange,
 }: BlockBodyEditorProps) {
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number
+    y: number
+    mediaTarget: { type: 'image' | 'video'; pos: number } | null
+  } | null>(null)
+  const [mediaCaption, setMediaCaption] = useState<MediaCaptionDialogState | null>(
+    null,
+  )
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const captionInputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const editor = useEditor(
     {
@@ -421,10 +505,10 @@ export function BlockBodyEditor({
   }, [editor, valueJson])
 
   useEffect(() => {
-    if (!menuPos) {
+    if (!ctxMenu) {
       return
     }
-    const close = () => setMenuPos(null)
+    const close = () => setCtxMenu(null)
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         close()
@@ -447,7 +531,66 @@ export function BlockBodyEditor({
       window.removeEventListener('resize', close)
       window.removeEventListener('keydown', onKey)
     }
-  }, [menuPos])
+  }, [ctxMenu])
+
+  const mediaCaptionTargetKey =
+    mediaCaption != null ? `${mediaCaption.pos}:${mediaCaption.type}` : null
+
+  useEffect(() => {
+    if (mediaCaptionTargetKey == null) {
+      return
+    }
+    const id = requestAnimationFrame(() => {
+      const ta = captionInputRef.current
+      ta?.focus()
+      ta?.select()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [mediaCaptionTargetKey])
+
+  useEffect(() => {
+    if (!mediaCaption) {
+      return
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMediaCaption(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mediaCaption != null])
+
+  const onRequestMediaCaption = useCallback(
+    (target: { type: 'image' | 'video'; pos: number }) => {
+      if (!editor) {
+        return
+      }
+      const node = editor.state.doc.nodeAt(target.pos)
+      const value =
+        node &&
+        typeof (node.attrs as { caption?: string | null }).caption === 'string'
+          ? ((node.attrs as { caption?: string | null }).caption ?? '')
+          : ''
+      setMediaCaption({ ...target, value })
+    },
+    [editor],
+  )
+
+  const onSaveMediaCaption = useCallback(() => {
+    if (!editor || !mediaCaption) {
+      return
+    }
+    const caption =
+      mediaCaption.value.trim() === '' ? null : mediaCaption.value.trim()
+    editor
+      .chain()
+      .focus()
+      .setNodeSelection(mediaCaption.pos)
+      .updateAttributes(mediaCaption.type, { caption })
+      .run()
+    setMediaCaption(null)
+  }, [editor, mediaCaption])
 
   const onContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -456,18 +599,23 @@ export function BlockBodyEditor({
         return
       }
       const view = editor.view
-      const coords = view.posAtCoords({
-        left: e.clientX,
-        top: e.clientY,
-      })
-      if (coords) {
+      const mediaTarget = getMediaContextTarget(editor, e.clientX, e.clientY)
+      const coords = !mediaTarget
+        ? view.posAtCoords({
+            left: e.clientX,
+            top: e.clientY,
+          })
+        : null
+      if (mediaTarget) {
+        editor.chain().focus().setNodeSelection(mediaTarget.pos).run()
+      } else if (coords) {
         editor.chain().focus().setTextSelection(coords.pos).run()
       } else {
         editor.chain().focus().run()
       }
       const pad = 8
-      const mw = 560
-      const mh = 52
+      const mw = mediaTarget ? 140 : 560
+      const mh = mediaTarget ? 44 : 52
       let x = e.clientX
       let y = e.clientY
       if (x + mw > window.innerWidth - pad) {
@@ -476,7 +624,7 @@ export function BlockBodyEditor({
       if (y + mh > window.innerHeight - pad) {
         y = Math.max(pad, window.innerHeight - mh - pad)
       }
-      setMenuPos({ x, y })
+      setCtxMenu({ x, y, mediaTarget })
     },
     [editor],
   )
@@ -499,14 +647,75 @@ export function BlockBodyEditor({
         <BlockTableBubbleToolbar editor={editor} />
       </BubbleMenu>
       <EditorContent editor={editor} />
-      {menuPos
+      {ctxMenu
         ? createPortal(
             <BlockBodyContextMenu
               ref={menuRef}
               editor={editor}
-              position={menuPos}
-              onClose={() => setMenuPos(null)}
+              position={{ x: ctxMenu.x, y: ctxMenu.y }}
+              mediaTarget={ctxMenu.mediaTarget}
+              onClose={() => setCtxMenu(null)}
+              onRequestMediaCaption={onRequestMediaCaption}
             />,
+            document.body,
+          )
+        : null}
+      {mediaCaption
+        ? createPortal(
+            <div
+              aria-labelledby="media-caption-dialog-title"
+              className="article-delete-dialog-backdrop"
+              role="presentation"
+              onClick={() => setMediaCaption(null)}
+            >
+              <div
+                aria-modal="true"
+                className="article-delete-dialog"
+                role="dialog"
+                onClick={(ev) => ev.stopPropagation()}
+              >
+                <h2
+                  className="article-delete-dialog__title"
+                  id="media-caption-dialog-title"
+                >
+                  Подпись к медиа
+                </h2>
+                <p className="article-delete-dialog__text">
+                  Текст под изображением или видео. Оставьте поле пустым, чтобы убрать
+                  подпись.
+                </p>
+                <label className="settings-dialog-field">
+                  <span className="visually-hidden">Текст подписи</span>
+                  <textarea
+                    ref={captionInputRef}
+                    className="media-caption-dialog__textarea"
+                    rows={3}
+                    value={mediaCaption.value}
+                    onChange={(ev) =>
+                      setMediaCaption((prev) =>
+                        prev ? { ...prev, value: ev.target.value } : prev,
+                      )
+                    }
+                  />
+                </label>
+                <div className="article-delete-dialog__actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => setMediaCaption(null)}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={onSaveMediaCaption}
+                  >
+                    Сохранить
+                  </button>
+                </div>
+              </div>
+            </div>,
             document.body,
           )
         : null}

@@ -2,6 +2,11 @@ import { mergeAttributes, Node } from '@tiptap/core'
 
 export type CalloutVariant = 'yellow' | 'red'
 
+const CALLOUT_HEADING: Record<CalloutVariant, string> = {
+  yellow: 'Внимание',
+  red: 'Важно',
+}
+
 /** Сноска с маркером-треугольником (жёлтый / красный). */
 export const Callout = Node.create({
   name: 'callout',
@@ -41,6 +46,7 @@ export const Callout = Node.create({
       mergeAttributes(HTMLAttributes, {
         'data-callout': '',
         'data-variant': variant,
+        'data-callout-heading': CALLOUT_HEADING[variant],
         class: `article-callout article-callout--${variant}`,
       }),
       0,

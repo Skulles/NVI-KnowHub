@@ -1,10 +1,8 @@
 import {
   type FormEvent,
-  useCallback,
   useEffect,
   useId,
   useMemo,
-  useRef,
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -15,6 +13,7 @@ import type {
   KnowledgeSection,
 } from '../../entities/knowledge/types'
 import { knowledgeBase } from '../../shared/lib/content/knowledge'
+import { useFormErrorToast } from '../../shared/hooks/useFormErrorToast'
 import {
   CustomSelect,
   type CustomSelectOption,
@@ -253,15 +252,6 @@ function validateArticleForSave(
   return null
 }
 
-const FORM_ERROR_TOAST_MS = 4800
-const FORM_ERROR_TOAST_EXIT_MS = 380
-
-type FormErrorToastState = {
-  id: number
-  message: string
-  open: boolean
-}
-
 /** Тип материала по контурам (один select вместо двух чипов). */
 type AudiencePreset = 'bu' | 'tkrs' | 'both'
 
@@ -366,60 +356,9 @@ export function AddArticleForm(props: AddArticleFormProps) {
     }
     return 'both'
   })
-  const [errorToast, setErrorToast] = useState<FormErrorToastState | null>(null)
+  const { toast, showErrorToast, dismissErrorToast } = useFormErrorToast()
   const [isSaving, setIsSaving] = useState(false)
   const [deleteArticleDialogOpen, setDeleteArticleDialogOpen] = useState(false)
-
-  const showErrorToast = useCallback((message: string) => {
-    setErrorToast((prev) => ({
-      id: (prev?.id ?? 0) + 1,
-      message,
-      open: false,
-    }))
-  }, [])
-
-  const dismissErrorToast = useCallback(() => {
-    setErrorToast(null)
-  }, [])
-
-  const openToastRafRef = useRef(0)
-
-  useEffect(() => {
-    if (!errorToast) {
-      return
-    }
-
-    let cancelled = false
-    let removeAfterClose: ReturnType<typeof setTimeout> | undefined
-
-    const raf = requestAnimationFrame(() => {
-      openToastRafRef.current = requestAnimationFrame(() => {
-        if (cancelled) {
-          return
-        }
-        setErrorToast((t) => (t ? { ...t, open: true } : null))
-      })
-    })
-
-    const hideTimer = window.setTimeout(() => {
-      setErrorToast((t) => (t ? { ...t, open: false } : null))
-      removeAfterClose = window.setTimeout(() => {
-        setErrorToast((t) => (t && !t.open ? null : t))
-      }, FORM_ERROR_TOAST_EXIT_MS)
-    }, FORM_ERROR_TOAST_MS)
-
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-      cancelAnimationFrame(openToastRafRef.current)
-      window.clearTimeout(hideTimer)
-      if (removeAfterClose) {
-        window.clearTimeout(removeAfterClose)
-      }
-    }
-    // Таймеры сбрасываем только при новом сообщении (id), не при смене open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [errorToast?.id])
 
   useEffect(() => {
     if (!isEdit || !article) {
@@ -574,6 +513,7 @@ export function AddArticleForm(props: AddArticleFormProps) {
     try {
       await props.onSaveDraft({
         articleId: article.id,
+        slug: article.slug,
         title: trimmed || article.title,
         summary: summaryToSave,
         contentJson,
@@ -833,7 +773,7 @@ export function AddArticleForm(props: AddArticleFormProps) {
                   Статья «{title.trim() || 'без названия'}» будет удалена только из
                   вашей локальной базы. Пока вы не опубликуете новый snapshot, другие
                   пользователи не увидят это изменение. Восстановить материал можно из
-                  резервной копии snapshot или заново загрузив релиз с GitHub.
+                  резервной копии snapsho.
                 </p>
                 <p className="article-delete-dialog__question">
                   Продолжить удаление?
@@ -867,13 +807,13 @@ export function AddArticleForm(props: AddArticleFormProps) {
           )
         : null}
       {createPortal(
-        errorToast ? (
+        toast ? (
           <div
-            className={`form-error-toast${errorToast.open ? ' form-error-toast--open' : ''}`}
-            role="alert"
             aria-live="assertive"
+            className={`form-error-toast${toast.variant === 'success' ? ' form-error-toast--success' : ''}${toast.open ? ' form-error-toast--open' : ''}`}
+            role="alert"
           >
-            {errorToast.message}
+            {toast.message}
           </div>
         ) : null,
         document.body,

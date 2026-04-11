@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ArticleDraft,
   AudienceKind,
@@ -12,24 +12,43 @@ import {
 
 type ArticleViewProps = {
   article: KnowledgeArticle | null
+  /** Загрузка статьи по URL (смена slug) до ответа базы */
+  articleRouteLoading: boolean
   activeAudience: AudienceKind
   draft: ArticleDraft | null
-  moderatorMode: boolean
+  editorMode: boolean
   onOpenEditor: () => void
+}
+
+function ArticleViewLoading() {
+  return (
+    <section
+      aria-busy="true"
+      aria-live="polite"
+      className="article-view-loading"
+      role="status"
+    >
+      <div aria-hidden className="boot-loader">
+        <div className="boot-loader__spinner" />
+      </div>
+      <span className="visually-hidden">Загрузка статьи</span>
+    </section>
+  )
 }
 
 export function ArticleView({
   article,
+  articleRouteLoading,
   activeAudience,
   draft,
-  moderatorMode,
+  editorMode,
   onOpenEditor,
 }: ArticleViewProps) {
   const preview = useMemo(() => {
     if (!article) {
       return null
     }
-    if (draft && moderatorMode) {
+    if (draft && editorMode) {
       return {
         ...article,
         title: draft.title,
@@ -42,7 +61,7 @@ export function ArticleView({
       }
     }
     return article
-  }, [article, draft, moderatorMode])
+  }, [article, draft, editorMode])
 
   const [resolvedContent, setResolvedContent] = useState<{
     sourceContentJson: string
@@ -58,7 +77,7 @@ export function ArticleView({
 
     void (async () => {
       const nextContentJson =
-        draft && moderatorMode
+        draft && editorMode
           ? await knowledgeBase.resolveDraftContent(preview.contentJson)
           : await knowledgeBase.resolveArticleContent(preview.contentJson)
 
@@ -73,7 +92,7 @@ export function ArticleView({
     return () => {
       cancelled = true
     }
-  }, [preview, draft, moderatorMode])
+  }, [preview, draft, editorMode])
 
   const resolvedContentJson =
     preview && resolvedContent?.sourceContentJson === preview.contentJson
@@ -89,6 +108,59 @@ export function ArticleView({
     }
     return renderArticleBodyForView(resolvedContentJson)
   }, [preview, resolvedContentJson])
+
+  const articleBodyRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const root = articleBodyRef.current
+    if (!root || !bodyHtml) {
+      return
+    }
+
+    const copyIconSvg = `<svg class="article-body__code-copy-icon--copy" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>`
+    const checkIconSvg = `<svg class="article-body__code-copy-icon--check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>`
+
+    root.querySelectorAll('pre').forEach((pre) => {
+      if (pre.parentElement?.classList.contains('article-body__pre-wrap')) {
+        return
+      }
+      const wrap = document.createElement('div')
+      wrap.className = 'article-body__pre-wrap'
+      pre.replaceWith(wrap)
+      wrap.appendChild(pre)
+
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'article-body__code-copy'
+      btn.title = 'Копировать код'
+      btn.setAttribute('aria-label', 'Копировать код')
+      btn.innerHTML = copyIconSvg + checkIconSvg
+
+      let copiedTimer: ReturnType<typeof setTimeout> | undefined
+      const onClick = () => {
+        void (async () => {
+          try {
+            const text =
+              pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
+            await navigator.clipboard.writeText(text)
+            btn.classList.add('article-body__code-copy--copied')
+            window.clearTimeout(copiedTimer)
+            copiedTimer = window.setTimeout(() => {
+              btn.classList.remove('article-body__code-copy--copied')
+            }, 2200)
+          } catch {
+            /* ignore */
+          }
+        })()
+      }
+      btn.addEventListener('click', onClick)
+      wrap.appendChild(btn)
+    })
+  }, [bodyHtml])
+
+  if (articleRouteLoading) {
+    return <ArticleViewLoading />
+  }
 
   if (!article || !preview) {
     return (
@@ -110,7 +182,7 @@ export function ArticleView({
         <div className="article-header__intro">
           <div className="article-title-row">
             <h1>{preview.title}</h1>
-            {moderatorMode ? (
+            {editorMode ? (
               <button
                 aria-label={editLabel}
                 className="article-edit-btn"
@@ -168,10 +240,24 @@ export function ArticleView({
         </nav>
       ) : null}
 
-      <div
-        className="article-body"
-        dangerouslySetInnerHTML={{ __html: bodyHtml }}
-      />
+      {resolvedContentJson ? (
+        <div
+          ref={articleBodyRef}
+          className="article-body"
+          dangerouslySetInnerHTML={{ __html: bodyHtml }}
+        />
+      ) : (
+        <div
+          aria-busy="true"
+          className="article-view-loading article-view-loading--embed"
+          role="status"
+        >
+          <div aria-hidden className="boot-loader">
+            <div className="boot-loader__spinner" />
+          </div>
+          <span className="visually-hidden">Загрузка содержимого</span>
+        </div>
+      )}
 
       <p className="article-meta article-meta--footer">
         Обновлено {new Date(preview.updatedAt).toLocaleDateString('ru-RU')}

@@ -1,28 +1,15 @@
-import { mergeAttributes, Node } from '@tiptap/core'
+import Image from '@tiptap/extension-image'
+import { mergeAttributes } from '@tiptap/core'
 
-/** Блок `<video>` с локальным `src` (обычно data URL из файла). */
-export const LocalVideo = Node.create({
-  name: 'video',
-
-  group: 'block',
-
-  atom: true,
-
-  draggable: true,
-
-  addOptions() {
-    return {
-      HTMLAttributes: {
-        class: 'article-body-video',
-      },
-    }
-  },
+/**
+ * Картинка в теле статьи с опциональной подписью (`figure` + `figcaption` в HTML).
+ */
+export const ArticleImage = Image.extend({
+  name: 'image',
 
   addAttributes() {
     return {
-      src: {
-        default: null,
-      },
+      ...this.parent?.(),
       caption: {
         default: null as string | null,
         parseHTML: (element) => {
@@ -39,26 +26,35 @@ export const LocalVideo = Node.create({
   },
 
   parseHTML() {
+    const imgTag = this.options.allowBase64 ? 'img[src]' : 'img[src]:not([src^="data:"])'
     return [
       {
         tag: 'figure.article-body-figure',
         getAttrs: (el: HTMLElement) => {
-          const vid = el.querySelector(':scope > video[src]')
-          if (!vid) {
+          const im = el.querySelector(':scope > img[src]')
+          if (!im) {
             return false
           }
           const caption =
             el.querySelector(':scope > figcaption')?.textContent?.trim() || null
           return {
-            src: vid.getAttribute('src'),
+            src: im.getAttribute('src'),
+            alt: im.getAttribute('alt'),
+            title: im.getAttribute('title'),
+            width: im.getAttribute('width'),
+            height: im.getAttribute('height'),
             caption,
           }
         },
       },
       {
-        tag: 'video[src]',
+        tag: imgTag,
         getAttrs: (el: HTMLElement) => ({
           src: el.getAttribute('src'),
+          alt: el.getAttribute('alt'),
+          title: el.getAttribute('title'),
+          width: el.getAttribute('width'),
+          height: el.getAttribute('height'),
           caption: el.getAttribute('data-caption'),
         }),
       },
@@ -70,21 +66,17 @@ export const LocalVideo = Node.create({
     const caption =
       typeof capRaw === 'string' && capRaw.trim() !== '' ? capRaw.trim() : ''
     const { caption: _c, ...rest } = HTMLAttributes as Record<string, unknown>
-    const videoNode: [string, Record<string, unknown>] = [
-      'video',
-      mergeAttributes(
-        { controls: 'true', playsInline: 'true' },
-        this.options.HTMLAttributes,
-        rest,
-      ),
+    const img: [string, Record<string, unknown>] = [
+      'img',
+      mergeAttributes(this.options.HTMLAttributes, rest),
     ]
     if (!caption) {
-      return videoNode
+      return img
     }
     return [
       'figure',
       { class: 'article-body-figure' },
-      videoNode,
+      img,
       ['figcaption', { class: 'article-body-media-caption' }, caption],
     ]
   },

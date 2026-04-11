@@ -318,7 +318,7 @@ const RU_TO_LAT: Readonly<Record<string, string>> = {
   я: 'ya',
 }
 
-function slugifyTitle(title: string) {
+export function slugifyArticleTitle(title: string) {
   const lower = title.trim().toLowerCase()
   let translit = ''
   for (const ch of lower) {
@@ -871,7 +871,7 @@ export class KnowledgeBaseService {
       throw new Error('Выберите хотя бы один тип: БУРОВАЯ или ТКРС.')
     }
 
-    const slugBase = slugifyTitle(title)
+    const slugBase = slugifyArticleTitle(title)
 
     let slug = slugBase
     let suffix = 2
@@ -1080,21 +1080,27 @@ export class KnowledgeBaseService {
         },
       })
       const db = new SQL.Database(bytes)
-      const loadedMeta = readSnapshotMeta(db)
+      ensureSnapshotSchema(db)
+      const embeddedMeta = readSnapshotMeta(db)
 
       onStageChange?.('verify', 'Проверяю схему, метаданные и checksum.')
+      if (
+        input.checksum?.trim() &&
+        embeddedMeta.checksum.trim() !== input.checksum.trim()
+      ) {
+        throw new Error('Checksum загруженного snapshot не совпадает с manifest.')
+      }
+      validateSnapshotDb(db)
+
       await this.normalizeSnapshotMetadata(db, {
-        version: loadedMeta.version || input.version,
-        updatedAt: loadedMeta.updatedAt || new Date().toISOString(),
-        publishedAt: loadedMeta.publishedAt || new Date().toISOString(),
+        version: embeddedMeta.version || input.version,
+        updatedAt: embeddedMeta.updatedAt || new Date().toISOString(),
+        publishedAt: embeddedMeta.publishedAt || new Date().toISOString(),
         source: 'release',
       })
       validateSnapshotDb(db)
 
       const nextMeta = readSnapshotMeta(db)
-      if (input.checksum?.trim() && nextMeta.checksum !== input.checksum.trim()) {
-        throw new Error('Checksum загруженного snapshot не совпадает с manifest.')
-      }
 
       onStageChange?.('apply', 'Применяю snapshot и перестраиваю поиск.')
       this.db = db

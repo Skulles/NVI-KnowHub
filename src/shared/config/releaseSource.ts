@@ -33,4 +33,4 @@ export function isReleaseSourceConfigured(
 }
 
 export const RELEASE_SOURCE_NOT_CONFIGURED_MESSAGE =
-  'Источник обновлений не задан: при сборке нужно указать VITE_GITHUB_OWNER, VITE_GITHUB_REPO и VITE_RELEASE_ASSET_NAME (см. .env.example).'
+  'Источник обновлений не задан'
