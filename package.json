@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "electron:dev": "concurrently -k \"npm:dev:electron-renderer\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "electron:pack": "npm run build && electron-builder --dir",
-    "electron:build": "npm run build && electron-builder --mac zip",
+    "electron:build": "npm run build && electron-builder",
+    "electron:build:mac": "npm run build && electron-builder --mac zip",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run"
