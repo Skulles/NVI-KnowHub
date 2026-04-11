@@ -146,8 +146,12 @@ export function createDesktopPlatformBridge(
         if ('networkError' in result && result.networkError) {
           throw new Error(NETWORK_FETCH_FAILED_MESSAGE)
         }
+        const detail =
+          result.ok === false
+            ? String(result.errorText ?? result.text ?? '')
+            : ''
         throw new Error(
-          formatFailedFetchError(result.status, url, result.text ?? ''),
+          formatFailedFetchError(result.status, url, detail),
         )
       }
       return result.data as {
