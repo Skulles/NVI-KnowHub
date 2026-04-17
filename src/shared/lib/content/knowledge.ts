@@ -1,4 +1,3 @@
-import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
 import { generateHTML } from '@tiptap/html'
@@ -6,22 +5,23 @@ import StarterKit from '@tiptap/starter-kit'
 import MiniSearch from 'minisearch'
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
-import type {
-  ApplySnapshotUpdateInput,
-  ApplySnapshotUpdateResult,
-  ApplySnapshotUpdateStage,
-  ArticleDraft,
-  AudienceKind,
-  CreateArticleInput,
-  GitHubReleaseSettings,
-  KnowledgeArticle,
-  KnowledgeSection,
-  PublishSnapshotInput,
-  PublishSnapshotResult,
-  SearchHit,
-  SnapshotManifest,
-  SnapshotMeta,
-  UpdateCheckResult,
+import {
+  type ApplySnapshotUpdateInput,
+  type ApplySnapshotUpdateResult,
+  type ApplySnapshotUpdateStage,
+  type ArticleDraft,
+  type AudienceKind,
+  type CreateArticleInput,
+  type GitHubReleaseSettings,
+  type KnowledgeArticle,
+  type KnowledgeSection,
+  type PublishSnapshotInput,
+  type PublishSnapshotResult,
+  type SearchHit,
+  type SnapshotManifest,
+  type SnapshotMeta,
+  type UpdateCheckResult,
+  TOOLS_SECTION_ID,
 } from '../../../entities/knowledge/types'
 import { platformBridge, type PlatformBridge } from '../platform'
 import { DraftStore } from './draftStore'
@@ -49,22 +49,52 @@ import {
   validateSnapshotDb,
 } from './schema'
 import { SnapshotStore } from './snapshotStore'
+import { articleLinkExtension } from '../tiptap/articleLinkExtension'
 import { articleBodyNodeExtensions } from '../tiptap/articleBodyNodeExtensions'
 import { RELEASE_SOURCE_NOT_CONFIGURED_MESSAGE } from '../../config/releaseSource'
 
 const MEDIA_ASSET_REF_PREFIX = 'asset://'
+
+/**
+ * Тег релиза (`releases/latest`) и `version` в snapshot/manifest часто разные
+ * (например тег `2026-04-11` и version `16-213045` в манифесте).
+ * Дополнительно сравниваем с `manifest.version` в checkForUpdates.
+ */
+function normalizeSnapshotVersionLabel(value: string): string {
+  return value
+    .trim()
+    .replace(/\u2013|\u2014/g, '-')
+    .toLowerCase()
+}
+
+function snapshotChecksumsEqual(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase()
+  const y = b.trim().toLowerCase()
+  return x.length > 0 && y.length > 0 && x === y
+}
+
+function releaseTagMatchesSnapshotVersion(
+  releaseTag: string,
+  snapshotVersion: string,
+): boolean {
+  const a = normalizeSnapshotVersionLabel(releaseTag)
+  const b = normalizeSnapshotVersionLabel(snapshotVersion)
+  if (a === b) {
+    return true
+  }
+  const stripLeadingV = (s: string) =>
+    s.startsWith('v') ? s.slice(1) : s
+  return stripLeadingV(a) === stripLeadingV(b)
+}
 
 function createEditorExtensions(placeholder?: string) {
   const baseExtensions = [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
       link: false,
+      codeBlock: false,
     }),
-    Link.configure({
-      openOnClick: false,
-      autolink: true,
-      defaultProtocol: 'https',
-    }),
+    articleLinkExtension,
     Underline,
     ...articleBodyNodeExtensions(),
   ]
@@ -680,6 +710,22 @@ export class KnowledgeBaseService {
     }
   }
 
+  /** Раздел «Инструменты» в старых snapshot без миграции. */
+  private ensureToolsSection() {
+    const db = this.ensureDb()
+    const probe = db.prepare('SELECT 1 FROM sections WHERE id = ? LIMIT 1')
+    probe.bind([TOOLS_SECTION_ID])
+    const exists = probe.step()
+    probe.free()
+    if (exists) {
+      return
+    }
+    db.run(
+      'INSERT INTO sections (id, title, parent_id, order_index) VALUES (?, ?, NULL, ?)',
+      [TOOLS_SECTION_ID, 'Инструменты', 0],
+    )
+  }
+
   async bootstrap() {
     const SQL = await this.loadSql()
     const snapshot = await this.snapshotStore.load()
@@ -690,6 +736,7 @@ export class KnowledgeBaseService {
       this.db.close()
       this.db = createSeedDatabase(SQL)
     }
+    this.ensureToolsSection()
     await this.normalizeSnapshotMetadata(this.ensureDb())
     await this.persistSnapshot()
     await this.rebuildSearch()
@@ -813,14 +860,17 @@ export class KnowledgeBaseService {
     const current = await this.getSnapshotMeta()
 
     let remoteChecksum: string | undefined
+    let remoteManifestVersion: string | undefined
     if (manifestAsset) {
       try {
         const manifest = await this.platform.requestJson<SnapshotManifest>(
           manifestAsset.browser_download_url,
         )
         remoteChecksum = manifest.checksum
+        remoteManifestVersion = manifest.version
       } catch {
         remoteChecksum = undefined
+        remoteManifestVersion = undefined
       }
     }
 
@@ -835,9 +885,43 @@ export class KnowledgeBaseService {
       }
     }
 
+    const remote = remoteChecksum?.trim()
+    const local = current.checksum.trim()
+
+    // 1) Версия из манифеста — главный идентификатор релиза (напр. `16-213045`), тег GitHub может отличаться.
+    // Не требуем совпадения checksum: после bootstrap локальный hash может чуть расходиться с json (sql.js export).
     if (
-      release.tag_name === current.version &&
-      (!remoteChecksum || remoteChecksum === current.checksum)
+      remoteManifestVersion != null &&
+      remoteManifestVersion.trim() !== '' &&
+      normalizeSnapshotVersionLabel(remoteManifestVersion) ===
+        normalizeSnapshotVersionLabel(current.version)
+    ) {
+      return {
+        status: 'up-to-date',
+        latestVersion: release.tag_name,
+        assetUrl: asset.browser_download_url,
+        manifestUrl: manifestAsset?.browser_download_url ?? null,
+        checksum: remoteChecksum,
+        message: 'У вас уже активна последняя версия базы знаний.',
+      }
+    }
+
+    // 2) Совпадение checksum (регистр hex и пробелы не должны ломать сравнение).
+    if (remote && local && snapshotChecksumsEqual(remote, local)) {
+      return {
+        status: 'up-to-date',
+        latestVersion: release.tag_name,
+        assetUrl: asset.browser_download_url,
+        manifestUrl: manifestAsset?.browser_download_url ?? null,
+        checksum: remoteChecksum,
+        message: 'У вас уже активна последняя версия базы знаний.',
+      }
+    }
+
+    // 3) Тег релиза совпадает с версией в базе (в т.ч. префикс `v`), checksum не противоречит.
+    if (
+      releaseTagMatchesSnapshotVersion(release.tag_name, current.version) &&
+      (!remote || !local || snapshotChecksumsEqual(remote, local))
     ) {
       return {
         status: 'up-to-date',
@@ -869,6 +953,10 @@ export class KnowledgeBaseService {
 
     if (!input.forBu && !input.forTkrs) {
       throw new Error('Выберите хотя бы один тип: БУРОВАЯ или ТКРС.')
+    }
+
+    if (input.sectionId === TOOLS_SECTION_ID) {
+      throw new Error('В раздел «Инструменты» нельзя добавлять статьи.')
     }
 
     const slugBase = slugifyArticleTitle(title)
@@ -1093,7 +1181,7 @@ export class KnowledgeBaseService {
       validateSnapshotDb(db)
 
       await this.normalizeSnapshotMetadata(db, {
-        version: embeddedMeta.version || input.version,
+        version: embeddedMeta.version.trim() || input.version.trim(),
         updatedAt: embeddedMeta.updatedAt || new Date().toISOString(),
         publishedAt: embeddedMeta.publishedAt || new Date().toISOString(),
         source: 'release',

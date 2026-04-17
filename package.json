@@ -12,6 +12,7 @@
     "electron:pack": "npm run build && electron-builder --dir",
     "electron:build": "npm run build && electron-builder",
     "electron:build:mac": "npm run build && electron-builder --mac zip",
+    "electron:build:win": "npm run build && electron-builder --win",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run"
@@ -72,6 +73,7 @@
       "package.json"
     ],
     "asar": true,
+    "icon": "public/knowhub-mark.png",
     "mac": {
       "target": [
         "zip"

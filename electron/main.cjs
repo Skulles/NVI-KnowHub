@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const fs = require('node:fs')
 const path = require('node:path')
 
 const DEV_SERVER_URL = 'http://127.0.0.1:5173'
@@ -108,13 +109,26 @@ ipcMain.handle('net-request', async (_event, req) => {
   throw new Error(`net-request: unknown kind ${kind}`)
 })
 
+function resolveWindowIconPath() {
+  const devPath = path.join(__dirname, '..', 'public', 'knowhub-mark.png')
+  const prodPath = path.join(__dirname, '..', 'dist', 'knowhub-mark.png')
+  if (fs.existsSync(devPath)) {
+    return devPath
+  }
+  if (fs.existsSync(prodPath)) {
+    return prodPath
+  }
+  return undefined
+}
+
 function createMainWindow() {
   const win = new BrowserWindow({
-    width: 960,
+    width: 1024,
     height: 540,
-    minWidth: 960,
+    minWidth: 1024,
     minHeight: 540,
     autoHideMenuBar: true,
+    icon: resolveWindowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

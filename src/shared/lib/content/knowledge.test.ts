@@ -307,7 +307,7 @@ describe('KnowledgeBaseService', () => {
 
     expect(meta.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION)
     expect(meta.articleCount).toBe(0)
-    expect(meta.sectionCount).toBe(3)
+    expect(meta.sectionCount).toBe(4)
     expect(meta.checksum).toMatch(/^[a-f0-9]{64}$/)
   })
 

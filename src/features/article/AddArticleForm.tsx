@@ -6,11 +6,12 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import type {
-  ArticleDraft,
-  AudienceKind,
-  KnowledgeArticle,
-  KnowledgeSection,
+import {
+  type ArticleDraft,
+  type AudienceKind,
+  type KnowledgeArticle,
+  type KnowledgeSection,
+  TOOLS_SECTION_ID,
 } from '../../entities/knowledge/types'
 import { knowledgeBase } from '../../shared/lib/content/knowledge'
 import { useFormErrorToast } from '../../shared/hooks/useFormErrorToast'
@@ -320,9 +321,14 @@ export function AddArticleForm(props: AddArticleFormProps) {
   const sectionLabelId = useId()
   const audienceLabelId = useId()
 
-  const sectionSelectOptions = useMemo(
-    () => sections.map((s) => ({ value: s.id, label: s.title })),
+  const articleSections = useMemo(
+    () => sections.filter((s) => s.id !== TOOLS_SECTION_ID),
     [sections],
+  )
+
+  const sectionSelectOptions = useMemo(
+    () => articleSections.map((s) => ({ value: s.id, label: s.title })),
+    [articleSections],
   )
 
   const [title, setTitle] = useState(() =>
@@ -339,7 +345,7 @@ export function AddArticleForm(props: AddArticleFormProps) {
   const [sectionId, setSectionId] = useState(() =>
     isEdit && article
       ? (draft?.sectionId ?? article.sectionId)
-      : (sections[0]?.id ?? ''),
+      : (articleSections[0]?.id ?? ''),
   )
   const [audiencePreset, setAudiencePreset] = useState<AudiencePreset>(() => {
     if (isEdit && article) {
@@ -397,8 +403,8 @@ export function AddArticleForm(props: AddArticleFormProps) {
     if (isEdit) {
       return
     }
-    setSectionId(sections[0]?.id ?? '')
-  }, [isEdit, sections])
+    setSectionId(articleSections[0]?.id ?? '')
+  }, [isEdit, articleSections])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -535,7 +541,7 @@ export function AddArticleForm(props: AddArticleFormProps) {
   const dialogLabel =
     isEdit ? 'Редактирование материала' : 'Добавить материал'
 
-  if (sections.length === 0 && !isEdit) {
+  if (articleSections.length === 0 && !isEdit) {
     return (
       <div
         aria-label={dialogLabel}

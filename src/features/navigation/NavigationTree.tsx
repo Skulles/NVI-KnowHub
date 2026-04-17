@@ -1,8 +1,10 @@
 import { Link, matchPath, useLocation } from 'react-router-dom'
-import type {
-  KnowledgeArticleSummary,
-  KnowledgeSection,
+import {
+  type KnowledgeArticleSummary,
+  type KnowledgeSection,
+  TOOLS_SECTION_ID,
 } from '../../entities/knowledge/types'
+import { TOOL_NAV_ENTRIES } from '../../shared/config/toolsNav'
 import {
   articlePath,
   decodeArticleSlugParam,
@@ -44,6 +46,22 @@ export function NavigationTree({
       {groupedSections.map((section) => (
         <section key={section.id} className="navigation-section">
           <h3>{section.title}</h3>
+          {section.id === TOOLS_SECTION_ID ? (
+            <ul>
+              {TOOL_NAV_ENTRIES.map((entry) => {
+                const isActive = Boolean(
+                  matchPath({ path: entry.path, end: true }, location.pathname),
+                )
+                return (
+                  <li key={entry.id}>
+                    <Link className={isActive ? 'active' : ''} to={entry.path}>
+                      <span className="navigation-tree__link-text">{entry.title}</span>
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
           <ul>
             {section.articles.map((article) => {
               const to = articlePath(article.slug)
@@ -101,6 +119,7 @@ export function NavigationTree({
               )
             })}
           </ul>
+          )}
         </section>
       ))}
     </nav>

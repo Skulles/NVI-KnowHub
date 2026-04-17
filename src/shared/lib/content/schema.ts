@@ -4,6 +4,7 @@ import type {
   KnowledgeSection,
   SnapshotMeta,
 } from '../../../entities/knowledge/types'
+import { TOOLS_SECTION_ID } from '../../../entities/knowledge/types'
 
 export const SNAPSHOT_SCHEMA_VERSION = 2
 export const SNAPSHOT_MANIFEST_SUFFIX = '.manifest.json'
@@ -18,6 +19,7 @@ export const seededSnapshotMeta = {
 } satisfies Omit<SnapshotMeta, 'articleCount' | 'sectionCount'>
 
 export const seedSections: KnowledgeSection[] = [
+  { id: TOOLS_SECTION_ID, title: 'Инструменты', parentId: null, orderIndex: 0 },
   { id: 'svyaz', title: 'Связь', parentId: null, orderIndex: 1 },
   { id: 'kamery', title: 'Камеры', parentId: null, orderIndex: 2 },
   { id: 'dokumenty', title: 'Документы', parentId: null, orderIndex: 3 },

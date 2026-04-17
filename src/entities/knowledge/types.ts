@@ -1,6 +1,9 @@
 /** БУРОВАЯ — буровой контур; ТКРС — товарно-кредитная розничная сеть (или ваш внутренний контур). */
 export type AudienceKind = 'bu' | 'tkrs'
 
+/** Раздел «Инструменты» — без статей, только встроенные страницы-инструменты. */
+export const TOOLS_SECTION_ID = 'instrumenty' as const
+
 export type KnowledgeSection = {
   id: string
   title: string

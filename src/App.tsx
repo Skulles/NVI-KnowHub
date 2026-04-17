@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -25,6 +26,7 @@ import { ArticleView } from './features/article/ArticleView'
 import { NavigationTree } from './features/navigation/NavigationTree'
 import { SettingsPanel } from './features/settings/SettingsPanel'
 import { UpdateSnapshotDialog } from './features/settings/UpdateSnapshotDialog'
+import { FuelConsumptionTool } from './features/tools/FuelConsumptionTool'
 import type {
   ApplySnapshotUpdateInput,
   ArticleDraft,
@@ -46,6 +48,7 @@ import {
 } from './shared/lib/routing/articlePath'
 import { useAppStore } from './shared/state/appStore'
 import { useFormErrorToast } from './shared/hooks/useFormErrorToast'
+const knowhubMarkUrl = `${import.meta.env.BASE_URL}knowhub-mark.png`
 
 /**
  * Путь приложения из `href` ссылки (Browser или Hash router, абсолютные URL того же origin).
@@ -666,10 +669,20 @@ function WorkspaceApp() {
 
       <aside className="sidebar" onClickCapture={onSidebarNavClickCapture}>
         <header className="sidebar-header">
-          <div className="sidebar-header__titles">
-           
-            <h1 className="sidebar-title">БАЗА ЗНАНИЙ</h1>
-            <p className="app-eyebrow">сервисная служба</p>
+          <div className="sidebar-header__brand">
+            <div
+              aria-hidden
+              className="sidebar-header__logo"
+              style={
+                {
+                  '--sidebar-mark-url': `url(${knowhubMarkUrl})`,
+                } as CSSProperties
+              }
+            />
+            <div className="sidebar-header__titles">
+              <h1 className="sidebar-title">БАЗА ЗНАНИЙ</h1>
+              <p className="app-eyebrow">сервисная служба</p>
+            </div>
           </div>
           <Link
             aria-label="Настройки"
@@ -788,6 +801,7 @@ function WorkspaceApp() {
               />
             }
           />
+          <Route path="/tools/fuel" element={<FuelConsumptionTool />} />
           <Route
             path="/settings"
             element={

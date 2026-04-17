@@ -1,6 +1,5 @@
 import type { Editor, JSONContent } from '@tiptap/core'
 import { PluginKey } from '@tiptap/pm/state'
-import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
@@ -16,6 +15,8 @@ import {
   type ChangeEvent,
   type ReactNode,
 } from 'react'
+import { applyArticleLinkToEditor } from '../../shared/lib/tiptap/articleLinkPrompt'
+import { articleLinkExtension } from '../../shared/lib/tiptap/articleLinkExtension'
 import { articleBodyNodeExtensions } from '../../shared/lib/tiptap/articleBodyNodeExtensions'
 import { CalloutMarkIcon } from './CalloutMarkIcon'
 import { BlockTableBubbleToolbar } from './BlockTableBubbleToolbar'
@@ -37,6 +38,25 @@ function parseBodyDoc(json: string): JSONContent {
     /* ignore */
   }
   return EMPTY_BODY_DOC
+}
+
+function getCodeBlockContextTarget(
+  editor: Editor,
+  clientX: number,
+  clientY: number,
+): { type: 'codeBlock'; pos: number } | null {
+  const coords = editor.view.posAtCoords({ left: clientX, top: clientY })
+  if (!coords) {
+    return null
+  }
+  const $pos = editor.state.doc.resolve(coords.pos)
+  for (let d = $pos.depth; d > 0; d--) {
+    const node = $pos.node(d)
+    if (node.type.name === 'codeBlock') {
+      return { type: 'codeBlock', pos: $pos.before(d) }
+    }
+  }
+  return null
 }
 
 function getMediaContextTarget(
@@ -93,7 +113,13 @@ function CtxIcon({ children }: { children: ReactNode }) {
   )
 }
 
-function BlockBubbleToolbar({ editor }: { editor: Editor }) {
+function BlockBubbleToolbar({
+  editor,
+  onOpenLinkDialog,
+}: {
+  editor: Editor
+  onOpenLinkDialog: () => void
+}) {
   const marks = useEditorState({
     editor,
     selector: ({ editor: ed }) => ({
@@ -102,6 +128,7 @@ function BlockBubbleToolbar({ editor }: { editor: Editor }) {
       underline: ed.isActive('underline'),
       strike: ed.isActive('strike'),
       code: ed.isActive('code'),
+      link: ed.isActive('link'),
     }),
   })
 
@@ -169,6 +196,32 @@ function BlockBubbleToolbar({ editor }: { editor: Editor }) {
           {'\u003c/\u003e'}
         </span>
       </button>
+
+      <div className="block-bubble-menu__sep" role="separator" aria-hidden />
+
+      <button
+        className={
+          marks.link ? 'block-bubble-menu__btn is-active' : 'block-bubble-menu__btn'
+        }
+        type="button"
+        title="Ссылка (выделите текст или поставьте курсор в ссылку)"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onOpenLinkDialog}
+      >
+        <span className="block-bubble-menu__glyph block-bubble-menu__glyph--link" aria-hidden>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M10 13a5 5 0 0 0 7.07 0l1.42-1.42a5 5 0 0 0-7.07-7.07l-.71.71" />
+            <path d="M14 11a5 5 0 0 0-7.07 0L5.5 12.42a5 5 0 0 0 7.07 7.07l.71-.71" />
+          </svg>
+        </span>
+      </button>
     </div>
   )
 }
@@ -176,14 +229,17 @@ function BlockBubbleToolbar({ editor }: { editor: Editor }) {
 type BlockBodyContextMenuProps = {
   editor: Editor
   position: { x: number; y: number }
-  mediaTarget: { type: 'image' | 'video'; pos: number } | null
+  captionTarget: { type: 'image' | 'video' | 'codeBlock'; pos: number } | null
   onClose: () => void
-  onRequestMediaCaption: (target: { type: 'image' | 'video'; pos: number }) => void
+  onRequestCaption: (target: {
+    type: 'image' | 'video' | 'codeBlock'
+    pos: number
+  }) => void
 }
 
 const BlockBodyContextMenu = forwardRef<HTMLDivElement, BlockBodyContextMenuProps>(
   function BlockBodyContextMenu(
-    { editor, position, mediaTarget, onClose, onRequestMediaCaption },
+    { editor, position, captionTarget, onClose, onRequestCaption },
     ref,
   ) {
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -233,25 +289,29 @@ const BlockBodyContextMenu = forwardRef<HTMLDivElement, BlockBodyContextMenuProp
     [editor, onClose],
   )
 
-  if (mediaTarget) {
+  if (captionTarget) {
+    const captionTitle =
+      captionTarget.type === 'codeBlock'
+        ? 'Подпись под блоком кода'
+        : 'Подпись под изображением или видео'
     return (
       <div
         ref={ref}
         className="block-body-context-menu"
         role="toolbar"
-        aria-label="Медиа"
+        aria-label={captionTarget.type === 'codeBlock' ? 'Код' : 'Медиа'}
         style={{ left: position.x, top: position.y }}
       >
         <button
           className="block-body-context-menu__btn block-body-context-menu__btn--text"
           type="button"
-          title="Подпись под изображением или видео"
+          title={captionTitle}
           onMouseDown={(ev) => {
             ev.preventDefault()
             ev.stopPropagation()
           }}
           onClick={() => {
-            onRequestMediaCaption(mediaTarget)
+            onRequestCaption(captionTarget)
             onClose()
           }}
         >
@@ -443,7 +503,7 @@ type BlockBodyEditorProps = {
 
 type MediaCaptionDialogState = {
   pos: number
-  type: 'image' | 'video'
+  type: 'image' | 'video' | 'codeBlock'
   value: string
 }
 
@@ -455,13 +515,15 @@ export function BlockBodyEditor({
   const [ctxMenu, setCtxMenu] = useState<{
     x: number
     y: number
-    mediaTarget: { type: 'image' | 'video'; pos: number } | null
+    captionTarget: { type: 'image' | 'video' | 'codeBlock'; pos: number } | null
   } | null>(null)
   const [mediaCaption, setMediaCaption] = useState<MediaCaptionDialogState | null>(
     null,
   )
+  const [linkDialog, setLinkDialog] = useState<{ draft: string } | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const captionInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const linkInputRef = useRef<HTMLInputElement | null>(null)
 
   const editor = useEditor(
     {
@@ -469,12 +531,9 @@ export function BlockBodyEditor({
         StarterKit.configure({
           heading: false,
           link: false,
+          codeBlock: false,
         }),
-        Link.configure({
-          openOnClick: false,
-          autolink: true,
-          defaultProtocol: 'https',
-        }),
+        articleLinkExtension,
         Underline,
         Placeholder.configure({ placeholder: 'Текст блока' }),
         ...articleBodyNodeExtensions(),
@@ -549,6 +608,31 @@ export function BlockBodyEditor({
   }, [mediaCaptionTargetKey])
 
   useEffect(() => {
+    if (!linkDialog) {
+      return
+    }
+    const id = requestAnimationFrame(() => {
+      const input = linkInputRef.current
+      input?.focus()
+      input?.select()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [linkDialog != null])
+
+  useEffect(() => {
+    if (!linkDialog) {
+      return
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLinkDialog(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [linkDialog != null])
+
+  useEffect(() => {
     if (!mediaCaption) {
       return
     }
@@ -561,8 +645,8 @@ export function BlockBodyEditor({
     return () => window.removeEventListener('keydown', onKey)
   }, [mediaCaption != null])
 
-  const onRequestMediaCaption = useCallback(
-    (target: { type: 'image' | 'video'; pos: number }) => {
+  const onRequestCaption = useCallback(
+    (target: { type: 'image' | 'video' | 'codeBlock'; pos: number }) => {
       if (!editor) {
         return
       }
@@ -592,6 +676,23 @@ export function BlockBodyEditor({
     setMediaCaption(null)
   }, [editor, mediaCaption])
 
+  const openLinkDialog = useCallback(() => {
+    if (!editor) {
+      return
+    }
+    const href = editor.getAttributes('link').href as string | undefined
+    const initial = href?.trim() ? href.trim() : 'https://'
+    setLinkDialog({ draft: initial })
+  }, [editor])
+
+  const onSaveLinkDialog = useCallback(() => {
+    if (!editor || !linkDialog) {
+      return
+    }
+    applyArticleLinkToEditor(editor, linkDialog.draft)
+    setLinkDialog(null)
+  }, [editor, linkDialog])
+
   const onContextMenu = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
@@ -600,22 +701,27 @@ export function BlockBodyEditor({
       }
       const view = editor.view
       const mediaTarget = getMediaContextTarget(editor, e.clientX, e.clientY)
-      const coords = !mediaTarget
+      const codeTarget =
+        mediaTarget == null
+          ? getCodeBlockContextTarget(editor, e.clientX, e.clientY)
+          : null
+      const captionTarget = mediaTarget ?? codeTarget
+      const coords = !captionTarget
         ? view.posAtCoords({
             left: e.clientX,
             top: e.clientY,
           })
         : null
-      if (mediaTarget) {
-        editor.chain().focus().setNodeSelection(mediaTarget.pos).run()
+      if (captionTarget) {
+        editor.chain().focus().setNodeSelection(captionTarget.pos).run()
       } else if (coords) {
         editor.chain().focus().setTextSelection(coords.pos).run()
       } else {
         editor.chain().focus().run()
       }
       const pad = 8
-      const mw = mediaTarget ? 140 : 560
-      const mh = mediaTarget ? 44 : 52
+      const mw = captionTarget ? 140 : 560
+      const mh = captionTarget ? 44 : 52
       let x = e.clientX
       let y = e.clientY
       if (x + mw > window.innerWidth - pad) {
@@ -624,7 +730,7 @@ export function BlockBodyEditor({
       if (y + mh > window.innerHeight - pad) {
         y = Math.max(pad, window.innerHeight - mh - pad)
       }
-      setCtxMenu({ x, y, mediaTarget })
+      setCtxMenu({ x, y, captionTarget })
     },
     [editor],
   )
@@ -636,7 +742,7 @@ export function BlockBodyEditor({
   return (
     <div className="block-body-editor" onContextMenu={onContextMenu}>
       <BubbleMenu editor={editor}>
-        <BlockBubbleToolbar editor={editor} />
+        <BlockBubbleToolbar editor={editor} onOpenLinkDialog={openLinkDialog} />
       </BubbleMenu>
       <BubbleMenu
         editor={editor}
@@ -653,9 +759,9 @@ export function BlockBodyEditor({
               ref={menuRef}
               editor={editor}
               position={{ x: ctxMenu.x, y: ctxMenu.y }}
-              mediaTarget={ctxMenu.mediaTarget}
+              captionTarget={ctxMenu.captionTarget}
               onClose={() => setCtxMenu(null)}
-              onRequestMediaCaption={onRequestMediaCaption}
+              onRequestCaption={onRequestCaption}
             />,
             document.body,
           )
@@ -678,11 +784,14 @@ export function BlockBodyEditor({
                   className="article-delete-dialog__title"
                   id="media-caption-dialog-title"
                 >
-                  Подпись к медиа
+                  {mediaCaption.type === 'codeBlock'
+                    ? 'Подпись к коду'
+                    : 'Подпись к медиа'}
                 </h2>
                 <p className="article-delete-dialog__text">
-                  Текст под изображением или видео. Оставьте поле пустым, чтобы убрать
-                  подпись.
+                  {mediaCaption.type === 'codeBlock'
+                    ? 'Текст под блоком кода. Оставьте поле пустым, чтобы убрать подпись.'
+                    : 'Текст под изображением или видео. Оставьте поле пустым, чтобы убрать подпись.'}
                 </p>
                 <label className="settings-dialog-field">
                   <span className="visually-hidden">Текст подписи</span>
@@ -711,6 +820,69 @@ export function BlockBodyEditor({
                     type="button"
                     onClick={onSaveMediaCaption}
                   >
+                    Сохранить
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {linkDialog
+        ? createPortal(
+            <div
+              aria-labelledby="article-link-dialog-title"
+              className="article-delete-dialog-backdrop"
+              role="presentation"
+              onClick={() => setLinkDialog(null)}
+            >
+              <div
+                aria-modal="true"
+                className="article-delete-dialog"
+                role="dialog"
+                onClick={(ev) => ev.stopPropagation()}
+              >
+                <h2
+                  className="article-delete-dialog__title"
+                  id="article-link-dialog-title"
+                >
+                  Ссылка
+                </h2>
+                <p className="article-delete-dialog__text">
+                  Адрес страницы, mailto: или #якорь. Оставьте поле пустым, чтобы убрать
+                  ссылку.
+                </p>
+                <label className="settings-dialog-field">
+                  <span className="visually-hidden">URL</span>
+                  <input
+                    ref={linkInputRef}
+                    autoComplete="off"
+                    className="settings-dialog-field__input"
+                    spellCheck={false}
+                    type="text"
+                    value={linkDialog.draft}
+                    onChange={(ev) =>
+                      setLinkDialog((prev) =>
+                        prev ? { draft: ev.target.value } : prev,
+                      )
+                    }
+                    onKeyDown={(ev) => {
+                      if (ev.key === 'Enter') {
+                        ev.preventDefault()
+                        onSaveLinkDialog()
+                      }
+                    }}
+                  />
+                </label>
+                <div className="article-delete-dialog__actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => setLinkDialog(null)}
+                  >
+                    Отмена
+                  </button>
+                  <button className="primary-button" type="button" onClick={onSaveLinkDialog}>
                     Сохранить
                   </button>
                 </div>

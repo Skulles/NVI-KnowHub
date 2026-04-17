@@ -9,6 +9,7 @@ import {
   knowledgeBase,
   renderArticleBodyForView,
 } from '../../shared/lib/content/knowledge'
+import { platformBridge } from '../../shared/lib/platform'
 
 type ArticleViewProps = {
   article: KnowledgeArticle | null
@@ -156,6 +157,33 @@ export function ArticleView({
       btn.addEventListener('click', onClick)
       wrap.appendChild(btn)
     })
+  }, [bodyHtml])
+
+  useEffect(() => {
+    const root = articleBodyRef.current
+    if (!root) {
+      return
+    }
+    const onLinkClick = (e: MouseEvent) => {
+      const t = e.target
+      if (!(t instanceof Element)) {
+        return
+      }
+      const anchor = t.closest('a[href]')
+      if (!anchor || !root.contains(anchor)) {
+        return
+      }
+      const href = anchor.getAttribute('href')
+      if (!href || href.startsWith('#')) {
+        return
+      }
+      if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href)) {
+        e.preventDefault()
+        platformBridge.openExternal(href)
+      }
+    }
+    root.addEventListener('click', onLinkClick)
+    return () => root.removeEventListener('click', onLinkClick)
   }, [bodyHtml])
 
   if (articleRouteLoading) {
