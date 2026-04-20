@@ -46,7 +46,8 @@ $script = $script -replace [regex]::Escape("        elif packet.control_packets[
 "@
 $script = $script -replace [regex]::Escape('                print("error: user not registered on server")'), '                print("Login failed, incorrect username or password", file=sys.stderr)'
 $script = $script -replace "(?s)    def on_tab_press\(event\):.*?keyboard\.on_press\(on_tab_press\)`r?`n`r?`n", ""
-$script = $script -replace [regex]::Escape("    print(args)`r`n"), ""
+$script = $script -replace "    print\(args\)\r?\n", ""
+$script = $script -replace "local_addr=\('0\.0\.0\.0',\s*20561\)", "local_addr=('0.0.0.0', 0)"
 Set-Content -Path $scriptPath -Value $script -NoNewline
 
 @"

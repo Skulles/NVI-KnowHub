@@ -14,6 +14,30 @@ function verifyBinary(filePath) {
   return result.status === 0 || result.status === 1
 }
 
+if (process.platform === 'win32') {
+  const scriptPath = path.join(repoRoot, 'scripts', 'build-mactelnet-win.ps1')
+  const result = spawnSync(
+    'powershell',
+    ['-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-StageToElectronBin'],
+    {
+      stdio: 'inherit',
+      windowsHide: false,
+    },
+  )
+
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1)
+  }
+
+  if (!fs.existsSync(targetPath) || !verifyBinary(targetPath)) {
+    console.error(`Failed to prepare verified Windows MAC-Telnet binary: ${targetPath}`)
+    process.exit(1)
+  }
+
+  console.log(`Prepared Windows MAC-Telnet binary: ${targetPath}`)
+  process.exit(0)
+}
+
 if (fs.existsSync(targetPath)) {
   if (!verifyBinary(targetPath)) {
     console.error(`mactelnet.exe exists but failed verification: ${targetPath}`)
@@ -23,35 +47,12 @@ if (fs.existsSync(targetPath)) {
   process.exit(0)
 }
 
-if (process.platform !== 'win32') {
-  console.error(
-    [
-      'Windows MAC-Telnet binary is missing.',
-      `Expected: ${targetPath}`,
-      'Run this build on Windows, or first provide a staged mactelnet.exe.',
-      'You can also use the GitHub Actions workflow to build the Windows app with MAC-Telnet.',
-    ].join('\n'),
-  )
-  process.exit(1)
-}
-
-const scriptPath = path.join(repoRoot, 'scripts', 'build-mactelnet-win.ps1')
-const result = spawnSync(
-  'powershell',
-  ['-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-StageToElectronBin'],
-  {
-    stdio: 'inherit',
-    windowsHide: false,
-  },
+console.error(
+  [
+    'Windows MAC-Telnet binary is missing.',
+    `Expected: ${targetPath}`,
+    'Run this build on Windows, or first provide a staged mactelnet.exe.',
+    'You can also use the GitHub Actions workflow to build the Windows app with MAC-Telnet.',
+  ].join('\n'),
 )
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1)
-}
-
-if (!fs.existsSync(targetPath) || !verifyBinary(targetPath)) {
-  console.error(`Failed to prepare verified Windows MAC-Telnet binary: ${targetPath}`)
-  process.exit(1)
-}
-
-console.log(`Prepared Windows MAC-Telnet binary: ${targetPath}`)
+process.exit(1)
