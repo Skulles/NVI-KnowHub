@@ -40,12 +40,23 @@ $script = $script -replace [regex]::Escape("            term_type = platform.sys
             term_width = width.to_bytes(2, "little")
             term_height = height.to_bytes(2, "little")
 "@
-$script = $script -replace [regex]::Escape("        elif packet.control_packets[0].packet_type == CP_END_AUTHENTICATION:`r`n            os.system('mode con: cols=150 lines=40')`r`n            os.system('cls')`r`n"), @"
+$script = $script -replace "(?s)        elif packet\.control_packets\[0\]\.packet_type == CP_END_AUTHENTICATION:\r?\n            os\.system\('mode con: cols=150 lines=40'\)\r?\n            os\.system\('cls'\)\r?\n", @"
         elif packet.control_packets[0].packet_type == CP_END_AUTHENTICATION:
-            pass
+            prompt_packet = self.make_packet(SYS_DATA)
+            prompt_packet.data = b'\r\n'
+            self.send(prompt_packet)
 "@
 $script = $script -replace [regex]::Escape('                print("error: user not registered on server")'), '                print("Login failed, incorrect username or password", file=sys.stderr)'
 $script = $script -replace "(?s)    def on_tab_press\(event\):.*?keyboard\.on_press\(on_tab_press\)`r?`n`r?`n", ""
+$script = $script -replace "(?s)                user_input = await loop\.run_in_executor\(None, sys\.stdin\.readline\)\r?\n                command = user_input\.strip\(\)\.encode\('utf-8'\)\r?\n                if command:\r?\n                    command_packet = self\.make_packet\(SYS_DATA\)\r?\n                    command_packet\.data = command \+ b'\\r\\n'\r?\n                    self\.send\(command_packet\)", @"
+                user_input = await loop.run_in_executor(None, sys.stdin.readline)
+                if user_input == '':
+                    continue
+                command = user_input.rstrip('\r\n').encode('utf-8')
+                command_packet = self.make_packet(SYS_DATA)
+                command_packet.data = command + b'\r\n'
+                self.send(command_packet)
+"@
 $script = $script -replace "    print\(args\)\r?\n", ""
 $script = $script -replace "local_addr=\('0\.0\.0\.0',\s*20561\)", "local_addr=('0.0.0.0', 0)"
 Set-Content -Path $scriptPath -Value $script -NoNewline
