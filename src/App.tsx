@@ -27,6 +27,7 @@ import { NavigationTree } from './features/navigation/NavigationTree'
 import { SettingsPanel } from './features/settings/SettingsPanel'
 import { UpdateSnapshotDialog } from './features/settings/UpdateSnapshotDialog'
 import { FuelConsumptionTool } from './features/tools/FuelConsumptionTool'
+import { MikroTikDiscoveryTool } from './features/tools/MikroTikDiscoveryTool'
 import type {
   ApplySnapshotUpdateInput,
   ArticleDraft,
@@ -680,7 +681,7 @@ function WorkspaceApp() {
               }
             />
             <div className="sidebar-header__titles">
-              <h1 className="sidebar-title">БАЗА ЗНАНИЙ</h1>
+              <h1 className="sidebar-title">KnowHub</h1>
               <p className="app-eyebrow">сервисная служба</p>
             </div>
           </div>
@@ -802,6 +803,7 @@ function WorkspaceApp() {
             }
           />
           <Route path="/tools/fuel" element={<FuelConsumptionTool />} />
+          <Route path="/tools/mikrotik" element={<MikroTikDiscoveryTool />} />
           <Route
             path="/settings"
             element={

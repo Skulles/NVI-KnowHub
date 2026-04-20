@@ -5,4 +5,9 @@ export const TOOL_NAV_ENTRIES = [
     title: 'Расчёт расхода топлива',
     path: '/tools/fuel',
   },
+  {
+    id: 'mikrotik',
+    title: 'Помощник настройки MikroTik',
+    path: '/tools/mikrotik',
+  },
 ] as const

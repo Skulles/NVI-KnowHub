@@ -13,6 +13,75 @@ type NetRequestPayload = {
   kind: 'json' | 'binary' | 'upload-json'
 }
 
+export type MikroTikDiscoveryStatus = 'idle' | 'listening' | 'error'
+
+export type MikroTikDiscoveredDevice = {
+  id: string
+  identity: string | null
+  mac: string | null
+  ipv4: string | null
+  ipv6: string | null
+  version: string | null
+  platform: string | null
+  board: string | null
+  interfaceName: string | null
+  softwareId: string | null
+  uptimeSeconds: number | null
+  address: string | null
+  lastSeen: string
+}
+
+export type MikroTikDiscoverySnapshot = {
+  status: MikroTikDiscoveryStatus
+  lastError: string | null
+  devices: MikroTikDiscoveredDevice[]
+}
+
+type DesktopMikroTikDiscoveryApi = {
+  start: () => Promise<MikroTikDiscoverySnapshot>
+  stop: () => Promise<MikroTikDiscoverySnapshot>
+  getSnapshot: () => Promise<MikroTikDiscoverySnapshot>
+  onSnapshot: (callback: (snapshot: MikroTikDiscoverySnapshot) => void) => () => void
+}
+
+export type MacTelnetPhase =
+  | 'idle'
+  | 'discovering'
+  | 'authenticating'
+  | 'connected'
+  | 'closed'
+
+export type MacTelnetEvent =
+  | { type: 'phase'; phase: MacTelnetPhase; authMode?: 'md5' | 'ec-srp'; reason?: string | null }
+  | { type: 'interface-try'; interface: string }
+  | { type: 'interface-use'; interface: string; address: string }
+  | { type: 'interface-skip'; interface: string; reason: string }
+  | { type: 'error'; message: string }
+  | { type: 'closed'; remote?: boolean }
+  | { type: string; [key: string]: unknown }
+
+export type MacTelnetConnectRequest = {
+  dstMac: string
+  username?: string
+  password?: string
+  cols?: number
+  rows?: number
+  term?: string
+}
+
+type DesktopMacTelnetApi = {
+  connect: (payload: MacTelnetConnectRequest) => Promise<{ sessionId: number }>
+  sendInput: (payload: { sessionId: number; data: string }) => Promise<boolean>
+  resize: (payload: { sessionId: number; cols: number; rows: number }) => Promise<boolean>
+  disconnect: (payload: { sessionId: number }) => Promise<boolean>
+  onData: (
+    callback: (payload: { sessionId: number; data: string }) => void,
+  ) => () => void
+  onEvent: (
+    callback: (payload: { sessionId: number; event: MacTelnetEvent }) => void,
+  ) => () => void
+}
+
 type NetRequestResult =
   | { ok: true; status: number; data: unknown }
   | { ok: true; status: 204; data: null }
@@ -30,7 +99,17 @@ declare global {
     desktopNet?: {
       request: (payload: NetRequestPayload) => Promise<NetRequestResult>
     }
+    desktopMikrotikDiscovery?: DesktopMikroTikDiscoveryApi
+    desktopMacTelnet?: DesktopMacTelnetApi
   }
+}
+
+export function getDesktopMikroTikDiscovery(): DesktopMikroTikDiscoveryApi | null {
+  return window.desktopMikrotikDiscovery ?? null
+}
+
+export function getDesktopMacTelnet(): DesktopMacTelnetApi | null {
+  return window.desktopMacTelnet ?? null
 }
 
 function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {

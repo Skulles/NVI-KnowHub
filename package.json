@@ -13,11 +13,16 @@
     "electron:build": "npm run build && electron-builder",
     "electron:build:mac": "npm run build && electron-builder --mac zip",
     "electron:build:win": "npm run build && electron-builder --win",
+    "electron:build:win:portable": "npm run build && electron-builder --win portable",
+    "mactelnet:build:win": "powershell -ExecutionPolicy Bypass -File scripts/build-mactelnet-win.ps1",
+    "mactelnet:stage:win": "powershell -ExecutionPolicy Bypass -File scripts/stage-mactelnet-win.ps1",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
     "@tanstack/react-query": "^5.96.2",
     "@tiptap/extension-bubble-menu": "^3.22.3",
     "@tiptap/extension-image": "^3.22.2",
@@ -32,6 +37,8 @@
     "@tiptap/pm": "^3.22.2",
     "@tiptap/react": "^3.22.2",
     "@tiptap/starter-kit": "^3.22.2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "idb-keyval": "^6.2.2",
     "minisearch": "^7.2.0",
     "react": "^19.2.4",
@@ -67,6 +74,15 @@
     "directories": {
       "output": "release"
     },
+    "extraResources": [
+      {
+        "from": "electron/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "files": [
       "dist/**",
       "electron/**",
@@ -79,6 +95,9 @@
         "zip"
       ],
       "category": "public.app-category.productivity"
+    },
+    "win": {
+      "icon": "public/knowhub-mark.ico"
     }
   }
 }
