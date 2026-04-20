@@ -40,12 +40,7 @@ $script = $script -replace [regex]::Escape("            term_type = platform.sys
             term_width = width.to_bytes(2, "little")
             term_height = height.to_bytes(2, "little")
 "@
-$script = $script -replace "(?s)        elif packet\.control_packets\[0\]\.packet_type == CP_END_AUTHENTICATION:\r?\n            os\.system\('mode con: cols=150 lines=40'\)\r?\n            os\.system\('cls'\)\r?\n", @"
-        elif packet.control_packets[0].packet_type == CP_END_AUTHENTICATION:
-            prompt_packet = self.make_packet(SYS_DATA)
-            prompt_packet.data = b'\r\n'
-            self.send(prompt_packet)
-"@
+$script = $script -replace "(?s)        elif packet\.control_packets\[0\]\.packet_type == CP_END_AUTHENTICATION:\r?\n            os\.system\('mode con: cols=150 lines=40'\)\r?\n            os\.system\('cls'\)\r?\n(\s*def connection_made\(self, transport\):)", "        elif packet.control_packets[0].packet_type == CP_END_AUTHENTICATION:`r`n            prompt_packet = self.make_packet(SYS_DATA)`r`n            prompt_packet.data = b'\r\n'`r`n            self.send(prompt_packet)`r`n`r`n`$1"
 $script = $script -replace [regex]::Escape('                print("error: user not registered on server")'), '                print("Login failed, incorrect username or password", file=sys.stderr)'
 $script = $script -replace "(?s)    def on_tab_press\(event\):.*?keyboard\.on_press\(on_tab_press\)`r?`n`r?`n", ""
 $script = $script -replace "(?s)                user_input = await loop\.run_in_executor\(None, sys\.stdin\.readline\)\r?\n                command = user_input\.strip\(\)\.encode\('utf-8'\)\r?\n                if command:\r?\n                    command_packet = self\.make_packet\(SYS_DATA\)\r?\n                    command_packet\.data = command \+ b'\\r\\n'\r?\n                    self\.send\(command_packet\)", @"
