@@ -75,6 +75,9 @@ function buildMissingBinaryMessage() {
   return `Не найден исполняемый файл MAC-Telnet. ${installHint}`
 }
 
+const AUTH_READY_MARKER = '__KNOWHUB_AUTH_OK__'
+const AUTH_TIMEOUT_MS = 15000
+
 function createMacTelnetSession(options) {
   const dstMac = String(options.dstMac ?? '').trim()
   const username = String(options.username ?? 'admin')
@@ -89,6 +92,21 @@ function createMacTelnetSession(options) {
     connected: false,
     stdoutBuffer: '',
     stderrBuffer: '',
+    authTimeout: null,
+  }
+
+  function clearAuthTimeout() {
+    if (state.authTimeout) {
+      clearTimeout(state.authTimeout)
+      state.authTimeout = null
+    }
+  }
+
+  function markConnected() {
+    if (state.connected) return
+    state.connected = true
+    clearAuthTimeout()
+    setPhase('connected')
   }
 
   function setPhase(phase, extra = {}) {
@@ -103,6 +121,7 @@ function createMacTelnetSession(options) {
   function close(reason = null) {
     if (state.closed) return
     state.closed = true
+    clearAuthTimeout()
 
     if (state.child) {
       try {
@@ -152,24 +171,39 @@ function createMacTelnetSession(options) {
 
       state.child = child
       setPhase('authenticating')
+      state.authTimeout = setTimeout(() => {
+        if (state.closed || state.connected) return
+        emitError('MAC-Telnet не завершил авторизацию вовремя. Проверьте пароль или совместимость Windows-клиента.')
+        close('auth-timeout')
+      }, AUTH_TIMEOUT_MS)
 
       child.stdout.on('data', (chunk) => {
         if (state.closed) return
-        const text = chunk.toString('utf8')
+        const rawText = chunk.toString('utf8')
+        if (rawText.includes(AUTH_READY_MARKER)) {
+          markConnected()
+        }
+        const text = rawText.split(AUTH_READY_MARKER).join('')
         state.stdoutBuffer = `${state.stdoutBuffer}${text}`.slice(-8192)
-        onOutput(Buffer.from(text, 'utf8'))
-
-        if (!state.connected && text.length > 0) {
-          state.connected = true
-          setPhase('connected')
+        if (text.length > 0) {
+          onOutput(Buffer.from(text, 'utf8'))
+          if (!state.connected) {
+            markConnected()
+          }
         }
       })
 
       child.stderr.on('data', (chunk) => {
         if (state.closed) return
-        const text = chunk.toString('utf8')
+        const rawText = chunk.toString('utf8')
+        if (rawText.includes(AUTH_READY_MARKER)) {
+          markConnected()
+        }
+        const text = rawText.split(AUTH_READY_MARKER).join('')
         state.stderrBuffer = `${state.stderrBuffer}${text}`.slice(-8192)
-        onOutput(Buffer.from(text, 'utf8'))
+        if (text.length > 0) {
+          onOutput(Buffer.from(text, 'utf8'))
+        }
       })
 
       child.on('error', (error) => {
