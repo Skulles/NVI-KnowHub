@@ -27,10 +27,11 @@ console.log(`Starting electron-builder with args: ${args.join(' ') || '(none)'}`
 
 const result =
   process.platform === 'win32'
-    ? spawnSync('cmd.exe', ['/d', '/s', '/c', `"${builderBin}" ${args.join(' ')}`], {
+    ? spawnSync(`"${builderBin}" ${args.join(' ')}`.trim(), {
         cwd: repoRoot,
         stdio: 'inherit',
         env,
+        shell: true,
         windowsHide: false,
       })
     : spawnSync(builderBin, args, {
