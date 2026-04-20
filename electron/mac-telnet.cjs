@@ -134,7 +134,10 @@ function createMacTelnetSession(options) {
     onStatus({ type: 'binary-path', source: resolved.source, path: resolved.command })
     setPhase('discovering')
 
-    const args = ['-A', '-u', username, '-p', password, '-t', '5', dstMac]
+    const args =
+      process.platform === 'win32'
+        ? ['-u', username, '-p', password, dstMac]
+        : ['-A', '-u', username, '-p', password, '-t', '5', dstMac]
 
     try {
       const child = spawn(resolved.command, args, {
