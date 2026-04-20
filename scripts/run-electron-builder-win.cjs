@@ -23,10 +23,25 @@ const env = {
   CSC_IDENTITY_AUTO_DISCOVERY: 'false',
 }
 
-const result = spawnSync(builderBin, args, {
-  cwd: repoRoot,
-  stdio: 'inherit',
-  env,
-})
+console.log(`Starting electron-builder with args: ${args.join(' ') || '(none)'}`)
+
+const result =
+  process.platform === 'win32'
+    ? spawnSync('cmd.exe', ['/d', '/s', '/c', `"${builderBin}" ${args.join(' ')}`], {
+        cwd: repoRoot,
+        stdio: 'inherit',
+        env,
+        windowsHide: false,
+      })
+    : spawnSync(builderBin, args, {
+        cwd: repoRoot,
+        stdio: 'inherit',
+        env,
+      })
+
+if (result.error) {
+  console.error(result.error)
+  process.exit(1)
+}
 
 process.exit(result.status ?? 1)
