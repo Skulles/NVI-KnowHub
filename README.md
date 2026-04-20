@@ -1,0 +1,1 @@
+npm run mactelnet:build:win -- -StageToElectronBin (нужны Git + MSYS2 с toolchain из шапки build-mactelnet-c-win.ps1), затем npm run electron:build:win

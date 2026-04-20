@@ -23,11 +23,11 @@ function buildBundledBinaryCandidates() {
   const appRoot = path.resolve(__dirname, '..')
 
   return [
-    path.join(process.resourcesPath || '', 'bin', exe),
     path.join(process.resourcesPath || '', 'bin', process.platform, process.arch, exe),
+    path.join(process.resourcesPath || '', 'bin', exe),
     path.join(process.resourcesPath || '', exe),
-    path.join(appRoot, 'electron', 'bin', exe),
     path.join(appRoot, 'electron', 'bin', process.platform, process.arch, exe),
+    path.join(appRoot, 'electron', 'bin', exe),
   ].filter(Boolean)
 }
 
@@ -70,13 +70,47 @@ function buildMissingBinaryMessage() {
   const winArchDir = process.arch === 'arm64' ? 'arm64' : 'x64'
   const installHint =
     process.platform === 'win32'
-      ? `Положите \`mactelnet.exe\` в \`electron/bin/win32/${winArchDir}/\` или задайте \`NVI_MACTELNET_PATH\`.`
+      ? `Соберите нативный клиент (haakonnessjoen) в \`electron/bin/win32/${winArchDir}/mactelnet.exe\` или задайте \`NVI_MACTELNET_PATH\`.`
       : 'Положите `mactelnet` в `electron/bin/<platform>/<arch>/`, установите его в PATH или задайте `NVI_MACTELNET_PATH`.'
   return `Не найден исполняемый файл MAC-Telnet. ${installHint}`
 }
 
 const AUTH_READY_MARKER = '__KNOWHUB_AUTH_OK__'
-const AUTH_TIMEOUT_MS = 15000
+const AUTH_TIMEOUT_MS = 45000
+
+function killChildProcess(child) {
+  if (!child) return
+  try {
+    child.stdin?.destroy()
+  } catch {
+    /* ignore */
+  }
+  try {
+    child.stdout?.destroy()
+  } catch {
+    /* ignore */
+  }
+  try {
+    child.stderr?.destroy()
+  } catch {
+    /* ignore */
+  }
+  try {
+    child.kill('SIGKILL')
+  } catch {
+    /* ignore */
+  }
+  if (process.platform === 'win32' && child.pid) {
+    try {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 function createMacTelnetSession(options) {
   const dstMac = String(options.dstMac ?? '').trim()
@@ -124,12 +158,9 @@ function createMacTelnetSession(options) {
     clearAuthTimeout()
 
     if (state.child) {
-      try {
-        state.child.kill()
-      } catch {
-        /* already gone */
-      }
+      const ch = state.child
       state.child = null
+      killChildProcess(ch)
     }
 
     onStatus({ type: 'phase', phase: 'closed', reason })
@@ -153,10 +184,7 @@ function createMacTelnetSession(options) {
     onStatus({ type: 'binary-path', source: resolved.source, path: resolved.command })
     setPhase('discovering')
 
-    const args =
-      process.platform === 'win32'
-        ? ['-u', username, '-p', password, dstMac]
-        : ['-A', '-u', username, '-p', password, '-t', '5', dstMac]
+    const args = ['-A', '-u', username, '-p', password, '-t', '5', dstMac]
 
     try {
       const child = spawn(resolved.command, args, {
@@ -173,7 +201,9 @@ function createMacTelnetSession(options) {
       setPhase('authenticating')
       state.authTimeout = setTimeout(() => {
         if (state.closed || state.connected) return
-        emitError('MAC-Telnet не завершил авторизацию вовремя. Проверьте пароль или совместимость Windows-клиента.')
+        emitError(
+          'MAC-Telnet не завершил авторизацию вовремя. Проверьте сеть и учётные данные; при необходимости укажите другой клиент через NVI_MACTELNET_PATH.',
+        )
         close('auth-timeout')
       }, AUTH_TIMEOUT_MS)
 

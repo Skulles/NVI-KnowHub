@@ -14,7 +14,7 @@
     "electron:build:mac": "npm run build && electron-builder --mac zip",
     "electron:build:win": "npm run build && node scripts/run-electron-builder-win.cjs --win",
     "electron:build:win:portable": "npm run build && node scripts/run-electron-builder-win.cjs --win portable",
-    "mactelnet:build:win": "powershell -ExecutionPolicy Bypass -File scripts/build-mactelnet-win.ps1",
+    "mactelnet:build:win": "powershell -ExecutionPolicy Bypass -File scripts/build-mactelnet-c-win.ps1",
     "mactelnet:stage:win": "powershell -ExecutionPolicy Bypass -File scripts/stage-mactelnet-win.ps1",
     "lint": "eslint .",
     "preview": "vite preview",

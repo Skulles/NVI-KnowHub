@@ -477,14 +477,21 @@ function closeMacTelnetSession(sessionId, reason) {
   if (!session) return
   macTelnetSessions.delete(sessionId)
   try {
-    session.close()
+    session.close(reason)
   } catch {
     /* already closed */
+    emitMacTelnet('mac-telnet:event', {
+      sessionId,
+      event: { type: 'phase', phase: 'closed', reason: reason ?? null },
+    })
   }
-  emitMacTelnet('mac-telnet:event', {
-    sessionId,
-    event: { type: 'phase', phase: 'closed', reason: reason ?? null },
-  })
+}
+
+function closeAllMacTelnetSessions(reason) {
+  const ids = [...macTelnetSessions.keys()]
+  for (const id of ids) {
+    closeMacTelnetSession(id, reason)
+  }
 }
 
 ipcMain.handle('mac-telnet:connect', async (_event, payload) => {
@@ -502,6 +509,8 @@ ipcMain.handle('mac-telnet:connect', async (_event, payload) => {
   if (!dstMac) {
     throw new Error('mac-telnet:connect: dstMac is required')
   }
+
+  closeAllMacTelnetSessions('replaced-by-new-connect')
 
   const sessionId = macTelnetNextId
   macTelnetNextId += 1
@@ -630,6 +639,10 @@ app.on('window-all-closed', () => {
   }
 })
 
+function cleanupMacTelnetOnQuit() {
+  closeAllMacTelnetSessions('app-quit')
+}
+
 app.on('before-quit', () => {
   stopMikrotikDiscoverySweep()
   if (mikrotikDiscoveryState.socket) {
@@ -639,12 +652,9 @@ app.on('before-quit', () => {
       resetMikrotikDiscoverySocket()
     }
   }
-  for (const session of macTelnetSessions.values()) {
-    try {
-      session.close()
-    } catch {
-      /* ignore */
-    }
-  }
-  macTelnetSessions.clear()
+  cleanupMacTelnetOnQuit()
+})
+
+app.on('will-quit', () => {
+  cleanupMacTelnetOnQuit()
 })

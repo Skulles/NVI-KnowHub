@@ -11,20 +11,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
         with:
-          python-version: '3.12'
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            autoconf
+            automake
+            libtool
+            pkgconf
 
-      - name: Build mactelnet.exe
+      - name: Build mactelnet.exe (native)
         shell: pwsh
-        run: |
-          ./scripts/build-mactelnet-win.ps1 -StageToElectronBin
+        run: ./scripts/build-mactelnet-c-win.ps1 -StageToElectronBin
 
       - name: Upload mactelnet.exe
         uses: actions/upload-artifact@v4
         with:
           name: mactelnet-win-x64
           path: |
-            artifacts/mactelnet-win/mactelnet.exe
+            artifacts/mactelnet-c-win/mactelnet.exe
             electron/bin/win32/x64/mactelnet.exe

@@ -17,10 +17,19 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup MSYS2 (MAC-Telnet native build)
+        uses: msys2/setup-msys2@v2
         with:
-          python-version: '3.12'
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            autoconf
+            automake
+            libtool
+            pkgconf
 
       - name: Install dependencies
         run: npm ci
