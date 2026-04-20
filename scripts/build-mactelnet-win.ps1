@@ -52,6 +52,13 @@ $script = $script -replace "(?s)                user_input = await loop\.run_in_
                 command_packet.data = command + b'\r\n'
                 self.send(command_packet)
 "@
+$script = $script -replace "(?s) def datagram_received\(self, data, addr\):\r?\n if self\.my_ip is None:\r?\n self\.my_ip = addr\[0\]\r?\n return\r?\n if self\.my_ip == addr\[0\]:\r?\n return\r?\n\r?\n self\.last_msg_time = time\.time\(\)\r?\n packet = Packet\.from_bytes\(data\)", @"
+ def datagram_received(self, data, addr):
+ self.last_msg_time = time.time()
+ packet = Packet.from_bytes(data)
+ if packet.src_mac == self.src_mac:
+ return
+"@
 $script = $script -replace "    print\(args\)\r?\n", ""
 $script = $script -replace "local_addr=\('0\.0\.0\.0',\s*20561\)", "local_addr=('0.0.0.0', 0)"
 Set-Content -Path $scriptPath -Value $script -NoNewline
