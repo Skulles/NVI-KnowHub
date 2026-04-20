@@ -97,7 +97,10 @@
       "category": "public.app-category.productivity"
     },
     "win": {
-      "icon": "public/knowhub-mark.ico"
+      "icon": "public/knowhub-mark.ico",
+      "target": [
+        "nsis"
+      ]
     }
   }
 }
