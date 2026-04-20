@@ -1,11 +1,11 @@
-$ErrorActionPreference = 'Stop'
-
 param(
   [Parameter(Mandatory = $true)]
   [string]$BinaryPath,
 
   [string]$Arch = "x64"
 )
+
+$ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $resolvedSource = Resolve-Path $BinaryPath
