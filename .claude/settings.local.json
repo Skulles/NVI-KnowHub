@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-electron-vite@latest --name nvi-knowhub --template react-ts)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(node -e \"const e = require\\('electron'\\); console.log\\(typeof e\\); console.log\\(Object.keys\\(e\\).slice\\(0,5\\)\\)\")",
+      "Bash(node node_modules/electron/install.js)",
+      "Bash(node -e \"const d = JSON.parse\\(require\\('fs'\\).readFileSync\\(0,'utf8'\\)\\); console.log\\('version:', d.version\\)\")",
+      "Bash(node -e \"const p = require\\('electron'\\); console.log\\('electron path:', p\\); require\\('child_process'\\).execFileSync\\(p, ['--version'], {encoding:'utf8', stdio:'pipe'}\\).split\\('\\\\n'\\).forEach\\(l => console.log\\(l\\)\\)\")",
+      "PowerShell(& \"C:\\\\Users\\\\mail\\\\Documents\\\\dev\\\\NVI-KnowHub\\\\node_modules\\\\electron\\\\dist\\\\electron.exe\" --version 2>&1)",
+      "PowerShell($f = Get-Item \"C:\\\\Users\\\\mail\\\\Documents\\\\dev\\\\NVI-KnowHub\\\\node_modules\\\\electron\\\\dist\\\\electron.exe\" -ErrorAction SilentlyContinue; if \\($f\\) { \"Size: $\\($f.Length\\) bytes; Modified: $\\($f.LastWriteTime\\)\" } else { \"FILE NOT FOUND\" }; Get-ChildItem \"C:\\\\Users\\\\mail\\\\Documents\\\\dev\\\\NVI-KnowHub\\\\node_modules\\\\electron\\\\dist\\\\\" | Select-Object Name, Length | Format-Table)",
+      "PowerShell($env:ELECTRON_RENDERER_URL = \"http://localhost:5173\"; $proc = Start-Process -FilePath \"C:\\\\Users\\\\mail\\\\Documents\\\\dev\\\\NVI-KnowHub\\\\node_modules\\\\electron\\\\dist\\\\electron.exe\" -ArgumentList \"C:\\\\Users\\\\mail\\\\Documents\\\\dev\\\\NVI-KnowHub\\\\out\\\\main\\\\index.js\" -Wait -NoNewWindow -PassThru -RedirectStandardOutput \"C:\\\\Temp\\\\electron-stdout.txt\" -RedirectStandardError \"C:\\\\Temp\\\\electron-stderr.txt\"; Write-Host \"Exit code: $\\($proc.ExitCode\\)\"; if \\(Test-Path \"C:\\\\Temp\\\\electron-stdout.txt\"\\) { Get-Content \"C:\\\\Temp\\\\electron-stdout.txt\" }; if \\(Test-Path \"C:\\\\Temp\\\\electron-stderr.txt\"\\) { Get-Content \"C:\\\\Temp\\\\electron-stderr.txt\" })"
+    ]
+  }
+}

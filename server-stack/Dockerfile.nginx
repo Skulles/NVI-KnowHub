@@ -1,0 +1,26 @@
+# Stage 1 — Build admin SPA
+FROM node:20-alpine AS admin-build
+WORKDIR /build
+
+ARG BASE_PATH=
+ENV BASE_PATH=${BASE_PATH}
+
+COPY admin/package*.json ./
+RUN npm ci
+
+COPY admin/ ./
+RUN npm run build
+
+# Stage 2 — nginx serving admin SPA
+FROM nginx:1.27-alpine AS runtime
+
+RUN apk add --no-cache gettext
+
+COPY --from=admin-build /build/dist /var/www/admin
+COPY nginx/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY nginx/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+EXPOSE 80
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

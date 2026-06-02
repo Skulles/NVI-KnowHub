@@ -1,0 +1,78 @@
+{
+  "name": "nvi-knowhub",
+  "version": "1.0.0",
+  "description": "База знаний NVI",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "content:pull": "node --env-file=.env scripts/content-pull.js",
+    "winbox:download": "node scripts/download-winbox.js",
+    "build": "npm run content:pull && npm run winbox:download && cross-env ELECTRON_RUN_AS_NODE= CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node --env-file=.env node_modules/electron-builder/out/cli/cli.js",
+    "build:unpack": "npm run winbox:download && cross-env ELECTRON_RUN_AS_NODE= CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node --env-file=.env node_modules/electron-builder/out/cli/cli.js --dir",
+    "preview": "cross-env ELECTRON_RUN_AS_NODE= electron-vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "NVI",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "cross-env": "^10.1.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/montserrat": "^5.2.8",
+    "@fontsource-variable/outfit": "^5.2.8",
+    "electron-updater": "^6.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.4"
+  },
+  "build": {
+    "appId": "com.nvi.knowhub",
+    "productName": "NVI KnowHub",
+    "directories": {
+      "buildResources": "build"
+    },
+    "files": [
+      "out"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "resources/content",
+        "to": "content"
+      },
+      {
+        "from": "resources/winbox",
+        "to": "winbox"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

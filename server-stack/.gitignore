@@ -1,0 +1,17 @@
+# Runtime data (mounted as Docker volume)
+data/
+
+# Build outputs
+server/dist/
+admin/dist/
+
+# Dependencies
+server/node_modules/
+admin/node_modules/
+
+# Environment (contains secrets)
+.env
+
+# OS
+.DS_Store
+Thumbs.db

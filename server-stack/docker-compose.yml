@@ -1,0 +1,57 @@
+services:
+
+  # ── Node.js API server ──────────────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /app/data
+      BASE_PATH: ${BASE_PATH:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+    volumes:
+      - data:/app/data
+    networks:
+      - internal
+    # Not exposed to host — only reachable via nginx
+    expose:
+      - "3000"
+
+  # ── Nginx (reverse proxy + admin SPA + static content) ────────────────────
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+      args:
+        BASE_PATH: ${BASE_PATH:-}
+    restart: unless-stopped
+    environment:
+      BASE_PATH: ${BASE_PATH:-}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      # Serve content + releases directly from nginx (faster than proxying)
+      - data:/var/data:ro
+    depends_on:
+      - server
+    networks:
+      - internal
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  data:
+    driver: local
+    # To use a host path instead (for easy backup / manual file drop):
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: /srv/knowhub/data
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+networks:
+  internal:
+    driver: bridge

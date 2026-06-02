@@ -1,0 +1,25 @@
+{
+  "version": 22,
+  "sections": [
+    {
+      "id": "instructions",
+      "title": "Инструкции",
+      "icon": "book",
+      "subsections": [
+        {
+          "id": "mikrotik",
+          "title": "MikroTik",
+          "items": [
+            {
+              "id": "article-1777539568236",
+              "title": "test",
+              "type": "article",
+              "htmlFile": "test.html",
+              "version": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
