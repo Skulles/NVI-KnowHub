@@ -1,5 +1,5 @@
 // Converts BlockNote JSON block array to custom HTML used by KnowHub.
-import { renderAlertCalloutHtml, type AlertCalloutVariant } from './callout-html'
+import { renderAlertCalloutHtml, type AlertCalloutVariant } from './callout-html.js'
 // BlockNote schema: https://www.blocknotejs.org/docs/editor-basics/document-structure
 
 export interface BNInlineContent {
