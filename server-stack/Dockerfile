@@ -16,6 +16,7 @@ COPY --from=build /build/package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=build /build/dist ./dist
+COPY server/healthcheck.cjs ./healthcheck.cjs
 
 ENV NODE_ENV=production
 ENV PORT=3000
