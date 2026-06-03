@@ -20,6 +20,18 @@ services:
     # Not exposed to host — only reachable via nginx
     expose:
       - "3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const p=process.env.BASE_PATH||'';require('http').get('http://127.0.0.1:3000'+p+'/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   # ── Nginx (reverse proxy + admin SPA + static content) ────────────────────
   nginx:
@@ -37,7 +49,8 @@ services:
       # Serve content + releases directly from nginx (faster than proxying)
       - data:/var/data:ro
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     networks:
       - internal
 
