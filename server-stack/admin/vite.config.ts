@@ -19,6 +19,11 @@ export default defineConfig({
     plugins: [react()],
     base: adminBase,
     envDir: stackDir,
+    resolve: {
+      alias: {
+        '@knowhub-shared': join(stackDir, '../src/shared')
+      }
+    },
     server: {
       port: 5173,
       proxy: {

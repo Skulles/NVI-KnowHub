@@ -1,4 +1,6 @@
 import React, { useMemo, useRef, useEffect } from 'react'
+import { attachArticleCodeHints } from '@knowhub-shared/article-code-hints'
+import { attachCodeCopyButtons } from '../lib/code-copy-button'
 import { blocksToArticleHtml, BNBlock } from '../lib/html-renderer'
 
 function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHtml: string } {
@@ -9,30 +11,17 @@ function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHt
   return { leadInner: undefined, bodyHtml: rest }
 }
 
-function useCopyButtons(ref: React.RefObject<HTMLElement | null>): void {
+function useArticleEnhancements(ref: React.RefObject<HTMLElement | null>, contentKey: string): void {
   useEffect(() => {
     const container = ref.current
     if (!container) return
-    const preEls = Array.from(container.querySelectorAll<HTMLElement>('pre'))
-    const cleanups: (() => void)[] = []
-    preEls.forEach((pre) => {
-      if (pre.querySelector('.ap-copy-btn')) return
-      const btn = document.createElement('button')
-      btn.className = 'ap-copy-btn'
-      btn.textContent = 'Копировать'
-      const handleClick = (): void => {
-        const text = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
-        navigator.clipboard.writeText(text).then(() => {
-          btn.textContent = 'Скопировано'
-          setTimeout(() => { btn.textContent = 'Копировать' }, 2000)
-        })
-      }
-      btn.addEventListener('click', handleClick)
-      pre.appendChild(btn)
-      cleanups.push(() => btn.removeEventListener('click', handleClick))
-    })
-    return () => cleanups.forEach((fn) => fn())
-  })
+    const cleanupCopy = attachCodeCopyButtons(container)
+    const cleanupHints = attachArticleCodeHints(container)
+    return () => {
+      cleanupCopy()
+      cleanupHints()
+    }
+  }, [ref, contentKey])
 }
 
 interface Props {
@@ -45,7 +34,7 @@ export function ArticlePreview({ title, lead, blocks }: Props): React.ReactEleme
   const html = useMemo(() => blocksToArticleHtml(title, lead, blocks), [title, lead, blocks])
   const { leadInner, bodyHtml } = useMemo(() => parseArticleHtml(html), [html])
   const articleRef = useRef<HTMLElement>(null)
-  useCopyButtons(articleRef)
+  useArticleEnhancements(articleRef, bodyHtml)
 
   return (
     <div className="app-preview flex-1 overflow-y-auto pb-20">

@@ -281,7 +281,7 @@ function buildLanPrefix(
 ): string[] {
   if (!wifiEnabled) {
     return [
-      `/ip address add address=${lanAddress.ip}/24 network=${lanAddress.net} interface=ether1 comment="Local network"`,
+      `/ip address add address=${lanAddress.ip}/24 network=${lanAddress.net} interface=ether1`,
     ]
   }
 
@@ -290,12 +290,12 @@ function buildLanPrefix(
   const hidden = wifiHidden ? ' hide-ssid=yes' : ''
 
   return [
-    `/interface bridge add name=bridge-lan comment="LAN+WiFi bridge"`,
+    `/interface bridge add name=bridge-lan`,
     `/interface bridge port add bridge=bridge-lan interface=ether1`,
     `/interface bridge port add bridge=bridge-lan interface=wlan1`,
     `/interface wireless security-profiles add name=ltap-wifi mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${psk}"`,
     `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=2ghz-b/g/n ssid="${ssid}" security-profile=ltap-wifi${hidden}`,
-    `/ip address add address=${lanAddress.ip}/24 network=${lanAddress.net} interface=bridge-lan comment="Local network"`,
+    `/ip address add address=${lanAddress.ip}/24 network=${lanAddress.net} interface=bridge-lan`,
   ]
 }
 
@@ -329,8 +329,12 @@ function managementAddresses(lanNet: string): string {
   return `${lanNet}/24,${MANAGEMENT_NETWORKS.join(',')}`
 }
 
+function stripRouterOsComment(command: string): string {
+  return command.replace(/\s+comment="[^"]*"/gi, '').trim()
+}
+
 function sanitizeRouterOsCommand(command: string): string {
-  return command.replace(/\s+place-before=\d+/gi, '').trim()
+  return stripRouterOsComment(command.replace(/\s+place-before=\d+/gi, ''))
 }
 
 function splitScriptToCommands(script: string): string[] {
@@ -365,13 +369,126 @@ function partitionVpnScript(commands: string[]): {
   return { vpnCommands, inputFirewallRules }
 }
 
-function withComment(command: string, comment: string): string {
-  const base = command.replace(/\s+comment="[^"]*"/gi, '')
-  return `${base} comment="${comment}"`
-}
-
 function findFirewallRule(rules: string[], pattern: RegExp): string | undefined {
   return rules.find((rule) => pattern.test(rule))
+}
+
+function extractRouterOsParam(command: string, param: string): string | undefined {
+  const quoted = command.match(new RegExp(`\\b${param}="([^"]+)"`, 'i'))
+  if (quoted) return quoted[1]
+  const bare = command.match(new RegExp(`\\b${param}=([^\\s"]+)`, 'i'))
+  return bare?.[1]
+}
+
+function extractIpsecNamesFromScript(scriptCommands: string[]): {
+  profileNames: string[]
+  proposalNames: string[]
+  peerNames: string[]
+} {
+  const profileNames = new Set<string>()
+  const proposalNames = new Set<string>()
+  const peerNames = new Set<string>()
+
+  for (const command of scriptCommands) {
+    if (/\/ip\s+ipsec\s+profile\s+add\b/i.test(command)) {
+      const name = extractRouterOsParam(command, 'name')
+      if (name) profileNames.add(name)
+    }
+    if (/\/ip\s+ipsec\s+proposal\s+add\b/i.test(command)) {
+      const name = extractRouterOsParam(command, 'name')
+      if (name) proposalNames.add(name)
+    }
+    if (/\/ip\s+ipsec\s+peer\s+add\b/i.test(command)) {
+      const name = extractRouterOsParam(command, 'name')
+      if (name) peerNames.add(name)
+    }
+    if (
+      /\/ip\s+ipsec\s+(?:policy|identity)\s+add\b/i.test(command) ||
+      /\/ip\s+ipsec\s+peer\s+add\b/i.test(command)
+    ) {
+      const peer = extractRouterOsParam(command, 'peer')
+      if (peer && !peer.startsWith('*')) peerNames.add(peer)
+    }
+    if (/\/ip\s+ipsec\s+policy\s+add\b/i.test(command)) {
+      const proposal = extractRouterOsParam(command, 'proposal')
+      if (proposal) proposalNames.add(proposal)
+    }
+  }
+
+  return {
+    profileNames: [...profileNames],
+    proposalNames: [...proposalNames],
+    peerNames: [...peerNames],
+  }
+}
+
+function buildIpsecCleanupBlock(scriptCommands: string[]): string[] {
+  const { profileNames, proposalNames, peerNames } = extractIpsecNamesFromScript(scriptCommands)
+  const commands = [
+    `/ip ipsec active-peers remove [find]`,
+    `/ip ipsec installed-sa remove [find]`,
+  ]
+
+  for (const name of proposalNames) {
+    commands.push(`/ip ipsec policy remove [find where proposal=${name}]`)
+  }
+  commands.push(`/ip ipsec policy remove [find where !default]`)
+
+  commands.push(`/ip ipsec identity remove [find]`)
+
+  for (const name of peerNames) {
+    commands.push(`/ip ipsec peer remove [find where name=${name}]`)
+  }
+  commands.push(`/ip ipsec peer remove [find]`)
+
+  for (const name of proposalNames) {
+    commands.push(`/ip ipsec proposal remove [find where name=${name}]`)
+  }
+  commands.push(`/ip ipsec proposal remove [find where name!=default]`)
+
+  for (const name of profileNames) {
+    commands.push(`/ip ipsec profile remove [find where name=${name}]`)
+  }
+  commands.push(`/ip ipsec profile remove [find where name!=default]`)
+
+  commands.push(`/ip ipsec mode-config remove [find where name!=default]`)
+
+  return commands
+}
+
+function buildCleanupBlock(scriptCommands: string[] = []): string[] {
+  return [
+    `/ip firewall filter remove [find]`,
+    `/ip firewall nat remove [find]`,
+    `/ip firewall mangle remove [find]`,
+    `/ip firewall raw remove [find]`,
+    `/ip firewall address-list remove [find]`,
+    ...buildIpsecCleanupBlock(scriptCommands),
+    `/ip dhcp-server remove [find]`,
+    `/ip dhcp-server network remove [find]`,
+    `/ip dhcp-client remove [find interface!=lte1]`,
+    `/ip address remove [find]`,
+    `/ip route remove [find where !dynamic]`,
+    `/ip dns static remove [find]`,
+    `/ip pool remove [find]`,
+    `/interface list member remove [find]`,
+    `/interface list remove [find]`,
+    `/interface bridge port remove [find]`,
+    `/interface wireless set [find default-name=wlan1] disabled=yes mode=station ssid=MikroTik security-profile=default`,
+    `/interface wireless security-profiles remove [find where name!=default]`,
+    `/interface bridge remove [find]`,
+    `/tool mac-server set allowed-interface-list=all`,
+    `/tool mac-server mac-winbox set allowed-interface-list=all`,
+    `/ip neighbor discovery-settings set discover-interface-list=all`,
+    `/ipv6 settings set disable-ipv6=no`,
+    `/ip service set telnet disabled=no`,
+    `/ip service set ftp disabled=no`,
+    `/ip service set www disabled=no`,
+    `/ip service set api disabled=no`,
+    `/ip service set api-ssl disabled=no`,
+    `/ip service set winbox address=""`,
+    `/ip service set ssh address=""`,
+  ]
 }
 
 function buildInputFirewallRules(
@@ -386,40 +503,38 @@ function buildInputFirewallRules(
   )
 
   const rules: string[] = [
-    `/ip firewall filter add chain=input action=accept connection-state=established,related comment="Allow established and related connections"`,
-    `/ip firewall filter add chain=input action=drop connection-state=invalid comment="Drop invalid packets"`,
+    `/ip firewall filter add chain=input action=accept connection-state=established,related`,
+    `/ip firewall filter add chain=input action=drop connection-state=invalid`,
   ]
 
   if (includeIpsecRules) {
     rules.push(
       lanMoscowRule
-        ? withComment(lanMoscowRule, 'Allow management from Moscow network')
-        : `/ip firewall filter add chain=input action=accept src-address-list=lan-moscow comment="Allow management from Moscow network"`,
+        ? stripRouterOsComment(lanMoscowRule)
+        : `/ip firewall filter add chain=input action=accept src-address-list=lan-moscow`,
     )
   }
 
-  rules.push(
-    `/ip firewall filter add chain=input action=accept src-address=${lanCidr} comment="Management from local LAN"`,
-  )
+  rules.push(`/ip firewall filter add chain=input action=accept src-address=${lanCidr}`)
 
   if (includeIpsecRules) {
     rules.push(
       udpIpsecRule
-        ? withComment(udpIpsecRule, 'Allow IPsec IKE (UDP 500, 4500)')
-        : `/ip firewall filter add chain=input action=accept protocol=udp dst-port=500,4500 comment="Allow IPsec IKE (UDP 500, 4500)"`,
-      `/ip firewall filter add chain=input action=accept protocol=ipsec-esp comment="Allow IPsec ESP"`,
+        ? stripRouterOsComment(udpIpsecRule)
+        : `/ip firewall filter add chain=input action=accept protocol=udp dst-port=500,4500`,
+      `/ip firewall filter add chain=input action=accept protocol=ipsec-esp`,
     )
   }
 
-  rules.push(`/ip firewall filter add chain=input action=drop comment="Drop everything else"`)
+  rules.push(`/ip firewall filter add chain=input action=drop`)
 
   return rules
 }
 
 function buildForwardFirewallRules(): string[] {
   return [
-    `/ip firewall filter add chain=forward action=accept connection-state=established,related comment="Allow established and related connections"`,
-    `/ip firewall filter add chain=forward action=drop connection-state=invalid comment="Drop invalid packets"`,
+    `/ip firewall filter add chain=forward action=accept connection-state=established,related`,
+    `/ip firewall filter add chain=forward action=drop connection-state=invalid`,
   ]
 }
 
@@ -433,22 +548,19 @@ function buildHardeningBlock(
   const mgmtAddrs = managementAddresses(lanAddress.net)
 
   return [
-    `/interface list add name=LAN comment="LAN interface list"`,
-    `/interface list member add list=LAN interface=${lanInterface} comment="LAN interface"`,
-    withComment(`/tool mac-server set allowed-interface-list=LAN`, 'MAC server on LAN only'),
-    withComment(`/tool mac-server mac-winbox set allowed-interface-list=LAN`, 'MAC Winbox on LAN only'),
-    withComment(
-      `/ip neighbor discovery-settings set discover-interface-list=LAN`,
-      'Neighbor discovery on LAN only',
-    ),
-    withComment(`/ipv6 settings set disable-ipv6=yes`, 'Disable IPv6'),
-    withComment(`/ip service set telnet disabled=yes`, 'Disable Telnet'),
-    withComment(`/ip service set ftp disabled=yes`, 'Disable FTP'),
-    withComment(`/ip service set www disabled=yes`, 'Disable HTTP'),
-    withComment(`/ip service set api disabled=yes`, 'Disable API'),
-    withComment(`/ip service set api-ssl disabled=yes`, 'Disable API-SSL'),
-    withComment(`/ip service set winbox address=${mgmtAddrs}`, 'Winbox from allowed networks only'),
-    withComment(`/ip service set ssh address=${mgmtAddrs}`, 'SSH from allowed networks only'),
+    `/interface list add name=LAN`,
+    `/interface list member add list=LAN interface=${lanInterface}`,
+    `/tool mac-server set allowed-interface-list=LAN`,
+    `/tool mac-server mac-winbox set allowed-interface-list=LAN`,
+    `/ip neighbor discovery-settings set discover-interface-list=LAN`,
+    `/ipv6 settings set disable-ipv6=yes`,
+    `/ip service set telnet disabled=yes`,
+    `/ip service set ftp disabled=yes`,
+    `/ip service set www disabled=yes`,
+    `/ip service set api disabled=yes`,
+    `/ip service set api-ssl disabled=yes`,
+    `/ip service set winbox address=${mgmtAddrs}`,
+    `/ip service set ssh address=${mgmtAddrs}`,
     ...buildInputFirewallRules(lanAddress, extractedInputRules, includeIpsecRules),
     ...buildForwardFirewallRules(),
   ]
@@ -480,13 +592,13 @@ function buildPreviewConfig(options: {
   const base = isManualSetup ? '' : primaryScript.trim()
   if (!isManualSetup && !base) return ''
 
-  const { vpnCommands, inputFirewallRules } = partitionVpnScript(
-    base ? splitScriptToCommands(base) : [],
-  )
+  const scriptCommands = base ? splitScriptToCommands(base) : []
+  const { vpnCommands, inputFirewallRules } = partitionVpnScript(scriptCommands)
 
   const sections = [
+    buildCleanupBlock(scriptCommands).join('\n'),
     buildLanPrefix(lanAddress, wifiEnabled, wifiSsid, wifiPassword, wifiHidden).join('\n'),
-    `/ip firewall nat add chain=srcnat out-interface=lte1 action=masquerade comment="Internet access via LTE"`,
+    `/ip firewall nat add chain=srcnat out-interface=lte1 action=masquerade`,
     vpnCommands.length > 0 ? vpnCommands.join('\n') : '',
     buildHardeningBlock(lanAddress, wifiEnabled, inputFirewallRules, !isManualSetup).join('\n'),
     [
@@ -506,7 +618,7 @@ function MikrotikConfigGenerator() {
   const [primaryScript, setPrimaryScript] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [owlDigits, setOwlDigits] = useState('')
-  const [ipOctets, setIpOctets] = useState<[string, string, string, string]>(['10', '66', '0', '1'])
+  const [ipOctets, setIpOctets] = useState<[string, string, string, string]>(['10', '0', '0', '1'])
   const [wifiEnabled, setWifiEnabled] = useState(false)
   const [wifiSsid, setWifiSsid] = useState('')
   const [wifiSsidEdited, setWifiSsidEdited] = useState(false)
@@ -636,21 +748,26 @@ function MikrotikConfigGenerator() {
   const deviceLabel =
     MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.label ?? deviceId
 
-  const openForDevice = useCallback((id: string) => {
-    setDeviceId(id)
-    setStep('input')
-    setCopied(false)
+  const resetGeneratorState = useCallback(() => {
+    setPrimaryScript('')
     setNewPassword('')
     setOwlDigits('')
-    setIpOctets(['10', '66', '0', '1'])
+    setIpOctets(['10', '0', '0', '1'])
     setIsManualSetup(false)
     setWifiEnabled(false)
     setWifiSsid('')
     setWifiSsidEdited(false)
     setWifiPassword('')
     setWifiHidden(false)
-    setModalOpen(true)
+    setStep('input')
+    setCopied(false)
   }, [])
+
+  const openForDevice = useCallback((id: string) => {
+    setDeviceId(id)
+    resetGeneratorState()
+    setModalOpen(true)
+  }, [resetGeneratorState])
 
   const goToSettingsStep = useCallback(() => {
     setIsManualSetup(false)
@@ -667,7 +784,7 @@ function MikrotikConfigGenerator() {
       applyOwlDigits(suggestedFromScript.owlDigits)
     } else {
       setOwlDigits('')
-      setIpOctets(['10', '66', '0', '1'])
+      setIpOctets(['10', '0', '0', '1'])
     }
     if (!newPassword.trim()) generateAdminPassword()
     setStep('settings')
@@ -675,8 +792,8 @@ function MikrotikConfigGenerator() {
 
   const closeModal = useCallback(() => {
     setModalOpen(false)
-    setCopied(false)
-  }, [])
+    resetGeneratorState()
+  }, [resetGeneratorState])
 
   useEffect(() => {
     if (!modalOpen) return
@@ -958,11 +1075,17 @@ function MikrotikConfigGenerator() {
                   <div className="flex flex-col gap-2">
                     <FieldLabel>Готовый конфиг</FieldLabel>
                     <span className="text-[12px] leading-relaxed text-label-tertiary">
-                      Вставьте в терминал WinBox или SSH.
+                      Вставьте в терминал через WinBox или SSH.
                     </span>
                     <pre className={`${fieldControlClass} m-0 max-h-[38vh] overflow-auto font-mono text-[12px] leading-[1.7]`}>
                       <code>{previewText || '(пусто — вернитесь назад и заполните параметры)'}</code>
                     </pre>
+                    <div className="mt-4 -mb-1 rounded-xl border border-tint-blue/25 bg-tint-blue/[0.06] px-4 py-3">
+                      <p className="m-0 text-[12px] leading-relaxed text-label-secondary">
+                        После применения конфига перезагрузите устройство командой{' '}
+                        <code className="font-mono text-label-primary">/system reboot</code>
+                      </p>
+                    </div>
                   </div>
 
                   <ModalFooter>

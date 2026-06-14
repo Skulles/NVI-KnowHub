@@ -1,4 +1,6 @@
 import React, { useMemo, useRef, useEffect } from 'react'
+import { attachArticleCodeCopyButtons } from '../../lib/article-code-copy'
+import { attachArticleCodeHints } from '../../lib/article-code-hints'
 import { useContentStore } from '../../store/content'
 import { getToolComponent } from '../../tools/registry'
 import { BookIcon } from '../Icons'
@@ -17,47 +19,24 @@ function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHt
   return { leadInner: undefined, bodyHtml: rest }
 }
 
-function useCopyButtons(ref: React.RefObject<HTMLElement>): void {
+function useArticleEnhancements(ref: React.RefObject<HTMLElement>, contentKey: string): void {
   useEffect(() => {
     const container = ref.current
     if (!container) return
-
-    const preEls = Array.from(container.querySelectorAll<HTMLElement>('pre'))
-    const cleanups: (() => void)[] = []
-
-    preEls.forEach((pre) => {
-      if (pre.querySelector('.copy-btn')) return
-
-      const btn = document.createElement('button')
-      btn.className = 'copy-btn'
-      btn.textContent = 'Копировать'
-
-      const handleClick = (): void => {
-        const text = pre.querySelector('code')?.textContent ?? pre.textContent ?? ''
-        navigator.clipboard.writeText(text).then(() => {
-          btn.textContent = 'Скопировано'
-          btn.classList.add('copied')
-          setTimeout(() => {
-            btn.textContent = 'Копировать'
-            btn.classList.remove('copied')
-          }, 2000)
-        })
-      }
-
-      btn.addEventListener('click', handleClick)
-      pre.appendChild(btn)
-      cleanups.push(() => btn.removeEventListener('click', handleClick))
-    })
-
-    return () => cleanups.forEach((fn) => fn())
-  })
+    const cleanupCopy = attachArticleCodeCopyButtons(container)
+    const cleanupHints = attachArticleCodeHints(container)
+    return () => {
+      cleanupCopy()
+      cleanupHints()
+    }
+  }, [ref, contentKey])
 }
 
 function ArticleDocument({ html, title }: { html: string; title: string }): React.ReactElement {
   const { leadInner, bodyHtml } = useMemo(() => parseArticleHtml(html), [html])
   const articleRef = useRef<HTMLElement>(null)
 
-  useCopyButtons(articleRef)
+  useArticleEnhancements(articleRef, bodyHtml)
 
   return (
     <div className="flex items-start">

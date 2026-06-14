@@ -3,6 +3,7 @@ import {
   BlockNoteSchema,
   createBlockSpec,
   defaultBlockSpecs,
+  defaultStyleSpecs,
   filterSuggestionItems,
   insertOrUpdateBlock
 } from '@blocknote/core'
@@ -12,10 +13,12 @@ import '@blocknote/mantine/style.css'
 import {
   useCreateBlockNote,
   getDefaultReactSlashMenuItems,
+  FormattingToolbarController,
   SuggestionMenuController,
   SideMenuController,
   type DefaultReactSuggestionItem
 } from '@blocknote/react'
+import { AdminFormattingToolbar } from './AdminFormattingToolbar'
 import { AdminSlashMenu } from './AdminSlashMenu'
 import { TableCellContextMenu } from './TableCellContextMenu'
 import { api, ArticleDraft, SectionTarget } from '../api'
@@ -23,6 +26,8 @@ import { PublishDialog } from './PublishDialog'
 import { PublishStatusBadge } from './PublishStatusBadge'
 import { titleToHtmlFile } from '../utils'
 import { ensureTableHeaderRows } from '../lib/ensure-table-header-rows'
+import { CodeBlockKeyboardExtension } from '../lib/code-block-keyboard-extension'
+import { CodeBlockPasteExtension } from '../lib/code-block-paste-extension'
 import { TableCellAlignmentExtension } from '../lib/table-cell-alignment-extension'
 import {
   applyTableCellAlignments,
@@ -31,6 +36,8 @@ import {
   normalizeTableBlocksForEditor,
 } from '../lib/table-cell-alignment'
 import { appendAlertCalloutChrome, type AlertCalloutVariant } from '../lib/callout-html'
+import { CodeBlock } from '../lib/code-block-spec'
+import { CodeHintStyle } from '../lib/code-hint-style'
 import { XMarkIcon } from './AdminIcons'
 
 const CALLOUT_CLASS: Record<string, string> = {
@@ -68,13 +75,33 @@ const Callout = createBlockSpec(
 )
 
 const schema = BlockNoteSchema.create({
-  blockSpecs: { ...defaultBlockSpecs, callout: Callout }
+  blockSpecs: { ...defaultBlockSpecs, callout: Callout, codeBlock: CodeBlock },
+  styleSpecs: { ...defaultStyleSpecs, codeHint: CodeHintStyle },
 })
 
 type EditorT = typeof schema.BlockNoteEditor
 
 function getEditorBlocks(ed: EditorT): unknown[] {
   return mergeTableAlignmentsIntoBlocks(ed.document as unknown[], ed)
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function normalizeUploadDataUrl(file: File, dataUrl: string): string {
+  if (
+    file.name.toLowerCase().endsWith('.mp4') &&
+    dataUrl.startsWith('data:application/octet-stream;base64,')
+  ) {
+    return dataUrl.replace('data:application/octet-stream;base64,', 'data:video/mp4;base64,')
+  }
+  return dataUrl
 }
 
 const ITEM_RENAMES: Record<string, { title: string; group: string } | null> = {
@@ -89,9 +116,7 @@ const ITEM_RENAMES: Record<string, { title: string; group: string } | null> = {
   'To-do List':      null,
   'Table':           { title: 'Таблица',               group: 'Вставка'  },
   'Image':           { title: 'Изображение',           group: 'Вставка'  },
-  'Code Block':      { title: 'Блок кода',             group: 'Вставка'  },
-  'Code':            { title: 'Блок кода',             group: 'Вставка'  },
-  'Video':           null,
+  'Video':           { title: 'Видео MP4',             group: 'Вставка'  },
   'Audio':           null,
   'File':            null,
 }
@@ -130,6 +155,8 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
   const hydrationRef = useRef(!!draftId)
   const debounceSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveRef = useRef<() => Promise<string>>(async () => '')
+  const saveInFlightRef = useRef<Promise<string> | null>(null)
+  const dirtyRef = useRef(!draftId)
   const publishGuardUntilRef = useRef(0)
   const tableHeaderFixRef = useRef(false)
   const editorZoneRef = useRef<HTMLDivElement>(null)
@@ -152,7 +179,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
   }, [])
 
   const scheduleDebouncedSave = useCallback((): void => {
-    if (isAutosaveBlocked()) return
+    if (isAutosaveBlocked() || !dirtyRef.current) return
     if (debounceSaveRef.current) clearTimeout(debounceSaveRef.current)
     debounceSaveRef.current = setTimeout(() => {
       debounceSaveRef.current = null
@@ -162,15 +189,24 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
 
   const editor = useCreateBlockNote({
     schema,
-    uploadFile: async (file: File): Promise<string> =>
-      new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result as string)
-        reader.onerror = reject
-        reader.readAsDataURL(file)
-      }),
+    uploadFile: async (file: File): Promise<string> => {
+      const isUnsupportedVideo =
+        file.type.startsWith('video/') &&
+        file.type !== 'video/mp4' &&
+        !file.name.toLowerCase().endsWith('.mp4')
+      if (isUnsupportedVideo) {
+        throw new Error('Поддерживаются только MP4-видео')
+      }
+      const dataUrl = normalizeUploadDataUrl(file, await fileToDataUrl(file))
+      const result = await api.uploadFile(dataUrl)
+      return result.url
+    },
     _tiptapOptions: {
-      extensions: [TableCellAlignmentExtension],
+      extensions: [
+        TableCellAlignmentExtension,
+        CodeBlockKeyboardExtension,
+        CodeBlockPasteExtension
+      ],
     },
   })
 
@@ -178,6 +214,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
     if (!draftId) {
       hydrationRef.current = false
       currentIdRef.current = newArticleId()
+      dirtyRef.current = true
       setPublished(false)
       setPublishedAt(null)
       setUpdatedAt(null)
@@ -186,6 +223,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
       return
     }
     hydrationRef.current = true
+    dirtyRef.current = false
     currentIdRef.current = draftId
     api
       .getArticle(draftId)
@@ -237,28 +275,49 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
   )
 
   const save = useCallback(async (): Promise<string> => {
-    setSaving(true)
-    try {
-      const section = targetSection ?? { sectionId: '', sectionTitle: '', sectionIcon: 'book' }
-      const result = await api.saveArticle({
-        id: currentIdRef.current,
-        title,
-        lead,
-        blocks: getEditorBlocks(editor),
-        sectionId: section.sectionId,
-        sectionTitle: section.sectionTitle,
-        sectionIcon: section.sectionIcon,
-        subsectionId: section.subsectionId ?? '',
-        subsectionTitle: section.subsectionTitle ?? ''
-      })
-      currentIdRef.current = result.id
-      applySaveMeta(result)
+    if (saveInFlightRef.current) return saveInFlightRef.current
+    if (!dirtyRef.current && currentIdRef.current) {
       setStatus('Сохранено')
       setTimeout(() => setStatus(null), 2000)
-      onSaved(result.id)
-      return result.id
+      return currentIdRef.current
+    }
+
+    const request = (async (): Promise<string> => {
+      setSaving(true)
+      try {
+        const section = targetSection ?? { sectionId: '', sectionTitle: '', sectionIcon: 'book' }
+        const result = await api.saveArticle({
+          id: currentIdRef.current,
+          title,
+          lead,
+          blocks: getEditorBlocks(editor),
+          sectionId: section.sectionId,
+          sectionTitle: section.sectionTitle,
+          sectionIcon: section.sectionIcon,
+          subsectionId: section.subsectionId ?? '',
+          subsectionTitle: section.subsectionTitle ?? ''
+        })
+        currentIdRef.current = result.id
+        dirtyRef.current = false
+        applySaveMeta(result)
+        setStatus('Сохранено')
+        setTimeout(() => setStatus(null), 2000)
+        onSaved(result.id)
+        return result.id
+      } catch (e) {
+        const message = (e as Error).message
+        setStatus(message.includes('Unauthorized') ? 'Сессия истекла — войдите снова' : `Ошибка: ${message}`)
+        throw e
+      } finally {
+        setSaving(false)
+      }
+    })()
+
+    saveInFlightRef.current = request
+    try {
+      return await request
     } finally {
-      setSaving(false)
+      if (saveInFlightRef.current === request) saveInFlightRef.current = null
     }
   }, [title, lead, targetSection, editor, onSaved, applySaveMeta])
 
@@ -268,6 +327,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
     return editor.onChange(() => {
       forceUpdate()
       if (!hydrationRef.current && !tableHeaderFixRef.current) {
+        dirtyRef.current = true
         tableHeaderFixRef.current = true
         requestAnimationFrame(() => {
           tableHeaderFixRef.current = false
@@ -279,11 +339,14 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
   }, [editor, scheduleDebouncedSave])
 
   useEffect(() => {
+    if (!isAutosaveBlocked()) dirtyRef.current = true
     scheduleDebouncedSave()
   }, [title, lead, scheduleDebouncedSave])
 
   useEffect(() => {
-    const interval = setInterval(() => { save().catch(console.error) }, 30_000)
+    const interval = setInterval(() => {
+      if (dirtyRef.current) save().catch(console.error)
+    }, 30_000)
     return () => clearInterval(interval)
   }, [save])
 
@@ -310,6 +373,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
       const result = await api.publishArticle(id)
       publishGuardUntilRef.current = Date.now() + 3000
       const fresh = await api.getArticle(id)
+      dirtyRef.current = false
       applySaveMeta({
         htmlFile: result.htmlFile ?? fresh.htmlFile,
         published: fresh.published,
@@ -364,6 +428,12 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
     })
     return [
       ...translated,
+      cleanSlashMenuItem({
+        title: 'Блок кода',
+        onItemClick: () => insertOrUpdateBlock(ed, { type: 'codeBlock' }),
+        aliases: ['code', 'код', 'pre', 'блок кода', 'codeblock'],
+        group: 'Вставка'
+      }),
       cleanSlashMenuItem({
         title: 'Заметка',
         onItemClick: () => insertOrUpdateBlock(ed, { type: 'callout', props: { variant: 'info' } }),
@@ -492,7 +562,8 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
           </header>
 
           <div ref={editorZoneRef} className="article-body article-content max-w-none article-editor">
-            <BlockNoteView editor={editor} theme="dark" slashMenu={false} sideMenu={false}>
+            <BlockNoteView editor={editor} theme="dark" slashMenu={false} sideMenu={false} formattingToolbar={false}>
+              <FormattingToolbarController formattingToolbar={AdminFormattingToolbar} />
               <SideMenuController />
               <SuggestionMenuController
                 triggerCharacter="/"

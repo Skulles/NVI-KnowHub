@@ -1,4 +1,5 @@
 // Converts BlockNote JSON block array to custom HTML used by KnowHub.
+import { renderCodeInlineHtml } from '@knowhub-shared/code-hint'
 import { renderAlertCalloutHtml, type AlertCalloutVariant } from './callout-html'
 // BlockNote schema: https://www.blocknotejs.org/docs/editor-basics/document-structure
 
@@ -40,7 +41,10 @@ function inlineToHtml(content: BNInlineContent[]): string {
       if (s.italic) text = `<em>${text}</em>`
       if (s.underline) text = `<u>${text}</u>`
       if (s.strikethrough) text = `<s>${text}</s>`
-      if (s.code) text = `<code>${text}</code>`
+      if (s.code) {
+        const hint = typeof s.codeHint === 'string' ? s.codeHint : ''
+        text = renderCodeInlineHtml(text, hint)
+      }
       return text
     })
     .join('')
@@ -151,6 +155,16 @@ function renderBlock(block: BNBlock): string {
         return `<figure class="article-image-wrap">${img}<figcaption>${escHtml(caption)}</figcaption></figure>`
       }
       return `<div class="article-image-wrap">${img}</div>`
+    }
+
+    case 'video': {
+      const src = escHtml((block.props.url as string) ?? '')
+      const caption = (block.props.caption as string) ?? ''
+      const video = `<video src="${src}" autoplay muted loop playsinline preload="auto"></video>`
+      if (caption) {
+        return `<figure class="article-video-wrap">${video}<figcaption>${escHtml(caption)}</figcaption></figure>`
+      }
+      return `<div class="article-video-wrap">${video}</div>`
     }
 
     case 'table': {

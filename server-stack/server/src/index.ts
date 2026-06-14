@@ -6,7 +6,7 @@ import { mkdirSync } from 'fs'
 import { basePath, withBase } from './base-path.js'
 import { createApiRouter } from './routes/api.js'
 import { createAuthRouter } from './routes/auth.js'
-import { isAuthConfigured } from './auth.js'
+import { initAuth, isAuthConfigured } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -20,6 +20,7 @@ const RELEASES_DIR = join(DATA_DIR, 'releases')
 mkdirSync(DRAFTS_DIR, { recursive: true })
 mkdirSync(CONTENT_DIR, { recursive: true })
 mkdirSync(RELEASES_DIR, { recursive: true })
+initAuth(DATA_DIR)
 
 const PORT = Number(process.env.PORT ?? 3000)
 const PREFIX = basePath()
@@ -38,7 +39,7 @@ routes.use('/content', express.static(CONTENT_DIR))
 routes.use('/releases', express.static(RELEASES_DIR))
 
 // Admin SPA — served by nginx in production; served here for dev convenience
-const adminDist = join(__dirname, '..', '..', '..', 'admin', 'dist')
+const adminDist = join(__dirname, '..', '..', 'admin', 'dist')
 routes.use('/admin', express.static(adminDist))
 routes.get('/admin/*', (_req, res) => {
   res.sendFile(join(adminDist, 'index.html'))

@@ -1,4 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'crypto'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import type { NextFunction, Request, Response } from 'express'
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -9,6 +11,26 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>()
+let sessionsFile: string | null = null
+
+function persistSessions(): void {
+  if (!sessionsFile) return
+  pruneExpired()
+  writeFileSync(sessionsFile, JSON.stringify(Object.fromEntries(sessions)), 'utf8')
+}
+
+export function initAuth(dataDir: string): void {
+  sessionsFile = join(dataDir, 'sessions.json')
+  if (!existsSync(sessionsFile)) return
+  try {
+    const raw = JSON.parse(readFileSync(sessionsFile, 'utf8')) as Record<string, Session>
+    for (const [token, session] of Object.entries(raw)) {
+      if (session.expiresAt > Date.now()) sessions.set(token, session)
+    }
+  } catch {
+    /* ignore corrupt file */
+  }
+}
 
 export function adminUsername(): string {
   return process.env.ADMIN_USERNAME?.trim() || 'admin'
@@ -52,18 +74,25 @@ export function createSession(username: string): { token: string; expiresAt: num
   const token = randomBytes(32).toString('hex')
   const expiresAt = Date.now() + SESSION_TTL_MS
   sessions.set(token, { username, expiresAt })
+  persistSessions()
   return { token, expiresAt }
 }
 
 export function revokeSession(token: string): void {
   sessions.delete(token)
+  persistSessions()
 }
 
 function pruneExpired(): void {
   const now = Date.now()
+  let changed = false
   for (const [token, session] of sessions) {
-    if (session.expiresAt <= now) sessions.delete(token)
+    if (session.expiresAt <= now) {
+      sessions.delete(token)
+      changed = true
+    }
   }
+  if (changed) persistSessions()
 }
 
 function bearerToken(req: Request): string | null {

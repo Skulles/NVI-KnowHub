@@ -12,7 +12,11 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@knowhub-shared/*": ["../../src/shared/*"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../../src/shared/code-copy-icons.ts", "../../src/shared/code-hint.ts", "../../src/shared/code-hint-sanitize.ts", "../../src/shared/article-code-hints.ts"]
 }

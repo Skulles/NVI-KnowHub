@@ -33,7 +33,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: headers(),
     body: body !== undefined ? JSON.stringify(body) : undefined
   })
-  if (res.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/session') {
+  if (res.status === 401 && path !== '/api/auth/login') {
     clearAuthToken()
     onUnauthorized?.()
   }
@@ -138,6 +138,10 @@ export interface PublishArticleResult {
   hasUnpublishedChanges: boolean
 }
 
+export interface UploadFileResult {
+  url: string
+}
+
 export const api = {
   getSession: () => request<SessionInfo>('GET', '/api/auth/session'),
   login: async (username: string, password: string) => {
@@ -174,6 +178,7 @@ export const api = {
   publishArticle: (id: string) =>
     request<PublishArticleResult>('POST', `/api/articles/${id}/publish`, {}),
   deleteArticle: (id: string) => request<{ ok: boolean }>('DELETE', `/api/articles/${id}`),
+  uploadFile: (dataUrl: string) => request<UploadFileResult>('POST', '/api/uploads', { dataUrl }),
   getManifest: () => request<Manifest>('GET', '/api/manifest'),
   updateManifest: (manifest: Manifest) => request<{ ok: boolean }>('PUT', '/api/manifest', manifest)
 }

@@ -1,10 +1,12 @@
 import { Router, Request, Response } from 'express'
 import { requireAdminAuth } from '../auth.js'
+import { randomBytes } from 'crypto'
 import {
   readdirSync, readFileSync, writeFileSync, unlinkSync,
   existsSync, mkdirSync
 } from 'fs'
 import { join } from 'path'
+import { basePath, withBase } from '../base-path.js'
 import { blocksToArticleHtml, BNBlock } from '../html-renderer.js'
 import {
   readManifest, writeManifest,
@@ -27,6 +29,119 @@ interface DraftRecord {
   subsectionId: string
   subsectionTitle: string
   htmlFile: string
+}
+
+const UPLOAD_EXTENSIONS: Record<string, string> = {
+  'image/gif': 'gif',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'video/mp4': 'mp4'
+}
+
+function parseUploadDataUrl(value: string): { mime: string; buffer: Buffer } | null {
+  const match = /^data:((?:image\/(?:gif|jpeg|png|webp))|video\/mp4);base64,([A-Za-z0-9+/=]+)$/i.exec(value)
+  if (!match) return null
+  return { mime: match[1].toLowerCase(), buffer: Buffer.from(match[2], 'base64') }
+}
+
+function uploadUrl(filename: string): string {
+  return withBase(`/content/uploads/${filename}`)
+}
+
+function writeUploadedAsset(contentDir: string, dataUrl: string): string | null {
+  const parsed = parseUploadDataUrl(dataUrl)
+  if (!parsed) return null
+  const ext = UPLOAD_EXTENSIONS[parsed.mime]
+  if (!ext) return null
+
+  const uploadsDir = join(contentDir, 'uploads')
+  mkdirSync(uploadsDir, { recursive: true })
+  const filename = `${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`
+  writeFileSync(join(uploadsDir, filename), parsed.buffer)
+  return uploadUrl(filename)
+}
+
+function uploadedContentPathFromUrl(value: string): string | null {
+  if (!value) return null
+  try {
+    const pathname = value.startsWith('http://') || value.startsWith('https://')
+      ? new URL(value).pathname
+      : value
+    const prefix = `${basePath()}/content/`.replace(/^\/content\//, '/content/')
+    if (!pathname.startsWith(prefix)) return null
+    const contentPath = pathname.slice(prefix.length)
+    return /^uploads\/[A-Za-z0-9._-]+$/.test(contentPath) ? contentPath : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeDraftMediaUploads(blocks: BNBlock[], contentDir: string): BNBlock[] {
+  let changed = false
+
+  const normalizeBlock = (block: BNBlock): BNBlock => {
+    let next = block
+    const url = typeof block.props?.url === 'string' ? block.props.url : ''
+    if ((block.type === 'image' || block.type === 'video') && /^data:(image\/|video\/mp4)/i.test(url)) {
+      const uploaded = writeUploadedAsset(contentDir, url)
+      if (uploaded) {
+        next = { ...block, props: { ...block.props, url: uploaded } }
+        changed = true
+      }
+    }
+
+    if (Array.isArray(next.children) && next.children.length > 0) {
+      const children = next.children.map(normalizeBlock)
+      if (children.some((child, index) => child !== next.children[index])) {
+        next = { ...next, children }
+      }
+    }
+
+    return next
+  }
+
+  const normalized = blocks.map(normalizeBlock)
+  return changed ? normalized : blocks
+}
+
+function mimeFromContentPath(contentPath: string): string {
+  const ext = contentPath.split('.').pop()?.toLowerCase()
+  if (ext === 'jpg') return 'image/jpeg'
+  if (ext === 'mp4') return 'video/mp4'
+  return ext ? `image/${ext}` : 'application/octet-stream'
+}
+
+function inlineUploadedMedia(blocks: BNBlock[], contentDir: string): BNBlock[] {
+  const inlineBlock = (block: BNBlock): BNBlock => {
+    let next = block
+    const url = typeof block.props?.url === 'string' ? block.props.url : ''
+    const contentPath = uploadedContentPathFromUrl(url)
+    if ((block.type === 'image' || block.type === 'video') && contentPath) {
+      const filePath = join(contentDir, contentPath)
+      if (existsSync(filePath)) {
+        const mime = mimeFromContentPath(contentPath)
+        const dataUrl = `data:${mime};base64,${readFileSync(filePath).toString('base64')}`
+        next = { ...block, props: { ...block.props, url: dataUrl } }
+      }
+    }
+
+    if (Array.isArray(next.children) && next.children.length > 0) {
+      next = { ...next, children: next.children.map(inlineBlock) }
+    }
+
+    return next
+  }
+
+  return blocks.map(inlineBlock)
+}
+
+function normalizeDraftAssets(draftsDir: string, contentDir: string, draft: DraftRecord): DraftRecord {
+  const blocks = normalizeDraftMediaUploads(draft.blocks, contentDir)
+  if (blocks === draft.blocks) return draft
+  const normalized = { ...draft, blocks }
+  writeFileSync(join(draftsDir, `${draft.id}.json`), JSON.stringify(normalized, null, 2), 'utf8')
+  return normalized
 }
 
 function normalizeDraft(raw: DraftRecord): DraftRecord {
@@ -136,7 +251,8 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
   })
 
   router.get('/articles/:id', (req, res) => {
-    const draft = readDraft(draftsDir, req.params.id)
+    const raw = readDraft(draftsDir, req.params.id)
+    const draft = raw ? normalizeDraftAssets(draftsDir, contentDir, raw) : null
     if (!draft) { res.status(404).json({ error: 'Not found' }); return }
     res.json({
       ...draft,
@@ -162,11 +278,12 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
     const existing = readDraft(draftsDir, id)
     const htmlFile = resolveHtmlFile(body.title, id, contentDir, draftsDir)
 
+    const draftBlocks = normalizeDraftMediaUploads(body.blocks, contentDir)
     const draft: DraftRecord = {
       id,
       title: body.title,
       lead: body.lead ?? '',
-      blocks: body.blocks,
+      blocks: draftBlocks,
       updatedAt: new Date().toISOString(),
       published: existing?.published ?? false,
       publishedAt: existing?.publishedAt ?? null,
@@ -189,6 +306,22 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
     })
   })
 
+  router.post('/uploads', (req: Request, res: Response) => {
+    const body = req.body as { dataUrl?: string }
+    if (!body.dataUrl) {
+      res.status(400).json({ error: 'Missing file data' })
+      return
+    }
+
+    const url = writeUploadedAsset(contentDir, body.dataUrl)
+    if (!url) {
+      res.status(400).json({ error: 'Unsupported file format' })
+      return
+    }
+
+    res.json({ url })
+  })
+
   router.post('/articles/:id/publish', (req, res) => {
     const path = join(draftsDir, `${req.params.id}.json`)
     if (!existsSync(path)) { res.status(404).json({ error: 'Draft not found' }); return }
@@ -199,7 +332,7 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
     const manifestEntry = findManifestItem(manifest, draft.id)
     const previousHtmlFile = manifestEntry?.htmlFile || draft.htmlFile
 
-    const html = blocksToArticleHtml(draft.title, draft.lead, draft.blocks)
+    const html = blocksToArticleHtml(draft.title, draft.lead, inlineUploadedMedia(draft.blocks, contentDir))
     mkdirSync(contentDir, { recursive: true })
     writeFileSync(join(contentDir, htmlFile), html, 'utf8')
 
