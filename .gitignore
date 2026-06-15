@@ -17,6 +17,9 @@ server-stack/admin/dist/
 resources/winbox/*
 !resources/winbox/.gitkeep
 
+# ─── Bundled content seed (manifest only; HTML pulled via npm run content:pull) ─
+resources/content/*.html
+
 # ─── Environment variables (contain secrets) ──────────────────────────────────
 .env
 server-stack/.env
