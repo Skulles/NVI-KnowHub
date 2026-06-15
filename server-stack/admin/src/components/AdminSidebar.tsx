@@ -6,6 +6,7 @@ import { toSlug } from '../utils'
 import {
   CheckIcon,
   ChevronIcon,
+  GripIcon,
   PencilIcon,
   PlusIcon,
   SearchIcon,
@@ -55,6 +56,34 @@ function flattenDivisions(manifest: Manifest): NavDivision[] {
   return items
 }
 
+function manifestArticleOrder(
+  manifest: Manifest,
+  sectionId: string,
+  subsectionId: string | null
+): Record<string, number> {
+  const section = manifest.sections.find((s) => s.id === sectionId)
+  if (!section) return {}
+  const items = subsectionId
+    ? (section.subsections?.find((s) => s.id === subsectionId)?.items ?? [])
+    : (section.items ?? [])
+  const order: Record<string, number> = {}
+  items.forEach((item, index) => {
+    order[item.id] = index
+  })
+  return order
+}
+
+function reorderIds(ids: string[], draggedId: string, targetId: string): string[] | null {
+  if (draggedId === targetId) return null
+  const from = ids.indexOf(draggedId)
+  const to = ids.indexOf(targetId)
+  if (from < 0 || to < 0) return null
+  const next = [...ids]
+  next.splice(from, 1)
+  next.splice(to, 0, draggedId)
+  return next
+}
+
 export function AdminSidebar({
   selectedTarget,
   activeArticleId,
@@ -73,6 +102,10 @@ export function AdminSidebar({
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [articlesLoading, setArticlesLoading] = useState(true)
+  const [dragArticleId, setDragArticleId] = useState<string | null>(null)
+  const [dragArticleOverId, setDragArticleOverId] = useState<string | null>(null)
+  const [dragSubId, setDragSubId] = useState<string | null>(null)
+  const [dragSubOverId, setDragSubOverId] = useState<string | null>(null)
 
   const query = search.trim().toLowerCase()
   const confirm = useConfirm()
@@ -107,12 +140,19 @@ export function AdminSidebar({
         list = list.filter(
           (a) => matchesQuery(a.title || '', query) || matchesQuery(a.htmlFile, query)
         )
+        return list.sort(
+          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        )
       }
-      return list.sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      )
+      const manifestOrder = manifest ? manifestArticleOrder(manifest, sectionId, subsectionId) : {}
+      return list.sort((a, b) => {
+        const orderA = a.sortOrder ?? manifestOrder[a.id] ?? Number.MAX_SAFE_INTEGER
+        const orderB = b.sortOrder ?? manifestOrder[b.id] ?? Number.MAX_SAFE_INTEGER
+        if (orderA !== orderB) return orderA - orderB
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      })
     },
-    [articles, query]
+    [articles, query, manifest]
   )
 
   const navDivisions = useMemo(() => (manifest ? flattenDivisions(manifest) : []), [manifest])
@@ -268,6 +308,72 @@ export function AdminSidebar({
     setArticles((list) => list.filter((x) => x.id !== id))
   }
 
+  const reorderArticles = async (
+    sectionId: string,
+    subsectionId: string | null,
+    draggedId: string,
+    targetId: string
+  ): Promise<void> => {
+    const nextIds = reorderIds(
+      articlesForDivision(sectionId, subsectionId).map((a) => a.id),
+      draggedId,
+      targetId
+    )
+    if (!nextIds) return
+
+    setArticles((prev) =>
+      prev.map((article) => {
+        const index = nextIds.indexOf(article.id)
+        return index >= 0 ? { ...article, sortOrder: index } : article
+      })
+    )
+
+    setSaving(true)
+    setError(null)
+    try {
+      await api.reorderArticles({
+        sectionId,
+        subsectionId: subsectionId || undefined,
+        articleIds: nextIds
+      })
+      await loadManifest()
+    } catch {
+      setError('Ошибка сохранения порядка статей')
+      const fresh = await api.listArticles()
+      setArticles(fresh)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const reorderSubsections = async (draggedId: string, targetId: string): Promise<void> => {
+    if (!manifest || !primarySectionId) return
+    const section = manifest.sections.find((s) => s.id === primarySectionId)
+    if (!section?.subsections) return
+
+    const nextIds = reorderIds(
+      section.subsections.map((sub) => sub.id),
+      draggedId,
+      targetId
+    )
+    if (!nextIds) return
+
+    const byId = new Map(section.subsections.map((sub) => [sub.id, sub]))
+    const reordered = nextIds
+      .map((id) => byId.get(id))
+      .filter((sub): sub is Subsection => !!sub)
+    const remaining = section.subsections.filter((sub) => !nextIds.includes(sub.id))
+
+    await persist({
+      ...manifest,
+      sections: manifest.sections.map((s) =>
+        s.id !== primarySectionId
+          ? s
+          : { ...s, subsections: [...reordered, ...remaining] }
+      )
+    })
+  }
+
   const selectDivision = ({ section, sub }: NavDivision): void => {
     const expandKey = divisionExpandKey(section.id, sub?.id ?? null)
     setExpanded((prev) => new Set([...prev, expandKey]))
@@ -321,15 +427,53 @@ export function AdminSidebar({
         )}
         {list.map((a) => {
           const isActive = activeArticleId === a.id
+          const isDragging = dragArticleId === a.id
+          const isDragOver = dragArticleOverId === a.id && dragArticleId !== a.id
           return (
             <div
               key={a.id}
-              className={`group admin-article-nav admin-article-nav--nested ${isActive ? 'admin-article-nav--active' : ''}`}
+              className={`group admin-article-nav admin-article-nav--nested ${isActive ? 'admin-article-nav--active' : ''} ${isDragging ? 'admin-dragging' : ''} ${isDragOver ? 'admin-drag-over' : ''}`}
               onClick={() => {
                 selectDivision(division)
                 onSelectArticle(a.id)
               }}
+              onDragOver={(e) => {
+                if (!dragArticleId || query) return
+                e.preventDefault()
+                setDragArticleOverId(a.id)
+              }}
+              onDragLeave={() => {
+                if (dragArticleOverId === a.id) setDragArticleOverId(null)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                if (!dragArticleId || query) return
+                void reorderArticles(section.id, subsectionId, dragArticleId, a.id)
+                setDragArticleId(null)
+                setDragArticleOverId(null)
+              }}
             >
+              {!query && (
+                <button
+                  type="button"
+                  draggable
+                  onDragStart={(e) => {
+                    e.stopPropagation()
+                    setDragArticleId(a.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                  }}
+                  onDragEnd={() => {
+                    setDragArticleId(null)
+                    setDragArticleOverId(null)
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="admin-drag-handle !p-0.5"
+                  title="Перетащить"
+                  aria-label="Перетащить статью"
+                >
+                  <GripIcon className="w-3 h-3" />
+                </button>
+              )}
               <PublishStatusDot
                 published={a.published}
                 updatedAt={a.updatedAt}
@@ -450,12 +594,51 @@ export function AdminSidebar({
                   editing.sectionId === section.id &&
                   editing.subsectionId === sub.id
 
+                const isSubDragging = dragSubId === sub.id
+                const isSubDragOver = dragSubOverId === sub.id && dragSubId !== sub.id
+
                 return (
                   <div key={expandKey} className="mb-0.5">
                     <div
-                      className="group admin-nav-item admin-nav-item--idle"
+                      className={`group admin-nav-item admin-nav-item--idle ${isSubDragging ? 'admin-dragging' : ''} ${isSubDragOver ? 'admin-drag-over' : ''}`}
                       onClick={() => toggleExpand(expandKey)}
+                      onDragOver={(e) => {
+                        if (!dragSubId || query || isRenaming) return
+                        e.preventDefault()
+                        setDragSubOverId(sub.id)
+                      }}
+                      onDragLeave={() => {
+                        if (dragSubOverId === sub.id) setDragSubOverId(null)
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        if (!dragSubId || query || isRenaming) return
+                        void reorderSubsections(dragSubId, sub.id)
+                        setDragSubId(null)
+                        setDragSubOverId(null)
+                      }}
                     >
+                      {!query && !isRenaming && (
+                        <button
+                          type="button"
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation()
+                            setDragSubId(sub.id)
+                            e.dataTransfer.effectAllowed = 'move'
+                          }}
+                          onDragEnd={() => {
+                            setDragSubId(null)
+                            setDragSubOverId(null)
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="admin-drag-handle !p-0.5 -ml-0.5"
+                          title="Перетащить раздел"
+                          aria-label="Перетащить раздел"
+                        >
+                          <GripIcon className="w-3 h-3" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => {

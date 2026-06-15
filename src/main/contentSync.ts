@@ -1,10 +1,13 @@
 import { app, BrowserWindow, net } from 'electron'
 import { join } from 'path'
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import type { ContentManifest } from '../shared/types'
 import { flattenManifestItems } from '../shared/manifest'
 
-const SERVER_URL = process.env['KNOWHUB_SERVER_URL'] ?? 'http://localhost:3000'
+function serverUrl(): string {
+  const raw = process.env['KNOWHUB_SERVER_URL']?.trim()
+  return raw || 'http://localhost:3000'
+}
 
 function getContentDir(): string {
   return join(app.getPath('userData'), 'content')
@@ -47,8 +50,13 @@ async function fetchJson<T>(url: string): Promise<T> {
     const request = net.request(url)
     let data = ''
     request.on('response', (response) => {
+      const status = response.statusCode ?? 0
       response.on('data', (chunk) => { data += chunk })
       response.on('end', () => {
+        if (status < 200 || status >= 300) {
+          reject(new Error(`HTTP ${status} for ${url}`))
+          return
+        }
         try { resolve(JSON.parse(data) as T) }
         catch (e) { reject(e) }
       })
@@ -63,8 +71,15 @@ async function fetchText(url: string): Promise<string> {
     const request = net.request(url)
     let data = ''
     request.on('response', (response) => {
+      const status = response.statusCode ?? 0
       response.on('data', (chunk) => { data += chunk })
-      response.on('end', () => resolve(data))
+      response.on('end', () => {
+        if (status < 200 || status >= 300) {
+          reject(new Error(`HTTP ${status} for ${url}`))
+          return
+        }
+        resolve(data)
+      })
     })
     request.on('error', reject)
     request.end()
@@ -80,40 +95,62 @@ function mergeManifests(local: ContentManifest, remote: ContentManifest): Conten
 async function syncContent(window: BrowserWindow): Promise<void> {
   ensureContentDir()
   const local = getManifest()
+  const baseUrl = serverUrl()
 
   let remote: ContentManifest
   try {
-    remote = await fetchJson<ContentManifest>(`${SERVER_URL}/content/manifest.json`)
-  } catch {
+    remote = await fetchJson<ContentManifest>(`${baseUrl}/content/manifest.json`)
+  } catch (e) {
+    console.error('Content sync: failed to fetch manifest:', e)
     return
   }
 
-  if (local && remote.version <= local.version) return
+  const localItems = local ? flattenManifestItems(local) : []
+  const localIds = new Map(localItems.map((i) => [i.id, i.version]))
+  const remoteItems = flattenManifestItems(remote)
+  const remoteIds = new Set(remoteItems.map((i) => i.id))
 
-  const localIds = local
-    ? new Map(flattenManifestItems(local).map((i) => [i.id, i.version]))
-    : new Map<string, number>()
-
-  const allRemoteItems = flattenManifestItems(remote)
-  const toDownload = allRemoteItems.filter(
+  const toDownload = remoteItems.filter(
     (item) => item.htmlFile && (!localIds.has(item.id) || localIds.get(item.id)! < item.version)
   )
+
+  const removedHtmlFiles = localItems
+    .filter((item) => item.htmlFile && !remoteIds.has(item.id))
+    .map((item) => item.htmlFile!)
+
+  const manifestChanged =
+    !local ||
+    remote.version !== local.version ||
+    JSON.stringify(local.sections) !== JSON.stringify(remote.sections)
+
+  if (!manifestChanged && toDownload.length === 0 && removedHtmlFiles.length === 0) {
+    return
+  }
 
   for (const item of toDownload) {
     if (!item.htmlFile) continue
     try {
-      const html = await fetchText(`${SERVER_URL}/content/${item.htmlFile}`)
+      const html = await fetchText(`${baseUrl}/content/${item.htmlFile}`)
       const dest = join(getContentDir(), item.htmlFile)
       const dir = dest.substring(0, Math.max(dest.lastIndexOf('/'), dest.lastIndexOf('\\')))
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       writeFileSync(dest, html, 'utf-8')
     } catch (e) {
-      console.error(`Failed to download ${item.htmlFile}:`, e)
+      console.error(`Content sync: failed to download ${item.htmlFile}:`, e)
     }
   }
 
+  for (const htmlFile of removedHtmlFiles) {
+    const path = join(getContentDir(), htmlFile)
+    if (existsSync(path)) unlinkSync(path)
+  }
+
   const merged = local ? mergeManifests(local, remote) : remote
-  writeFileSync(getManifestPath(), JSON.stringify(merged, null, 2), 'utf-8')
+  const hasLocalOnlySections = (local?.sections ?? []).some(
+    (section) => !remote.sections.some((remoteSection) => remoteSection.id === section.id)
+  )
+  const catalog = hasLocalOnlySections ? merged : remote
+  writeFileSync(getManifestPath(), JSON.stringify(catalog, null, 2), 'utf-8')
   window.webContents.send('content:updated')
 }
 
@@ -125,12 +162,35 @@ function getBundledContentDir(): string {
 }
 
 function seedFromBundled(): void {
-  // In prod: seed only on first launch. In dev: always overwrite so file edits are reflected immediately.
-  if (app.isPackaged && existsSync(getManifestPath())) return
   const bundledDir = getBundledContentDir()
   if (!existsSync(bundledDir)) return
+
+  const bundledManifestPath = join(bundledDir, 'manifest.json')
+  if (!existsSync(bundledManifestPath)) return
+
   ensureContentDir()
-  cpSync(bundledDir, getContentDir(), { recursive: true, force: true })
+  const localManifestPath = getManifestPath()
+
+  // Dev: always mirror bundled resources so local edits show up immediately.
+  if (!app.isPackaged) {
+    cpSync(bundledDir, getContentDir(), { recursive: true, force: true })
+    return
+  }
+
+  if (!existsSync(localManifestPath)) {
+    cpSync(bundledDir, getContentDir(), { recursive: true, force: true })
+    return
+  }
+
+  try {
+    const local = JSON.parse(readFileSync(localManifestPath, 'utf-8')) as ContentManifest
+    const bundled = JSON.parse(readFileSync(bundledManifestPath, 'utf-8')) as ContentManifest
+    if ((bundled.version ?? 0) > (local.version ?? 0)) {
+      cpSync(bundledDir, getContentDir(), { recursive: true, force: true })
+    }
+  } catch {
+    cpSync(bundledDir, getContentDir(), { recursive: true, force: true })
+  }
 }
 
 /** Даём рендереру успеть навесить `ipcRenderer.on('content:updated')`, иначе первое событие теряется. */

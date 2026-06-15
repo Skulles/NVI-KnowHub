@@ -38,8 +38,8 @@ function SectionItem({ item, onSelect, isSelected }: {
         </span>
       )}
       <span className={`truncate ${tool ? '' : 'w-full font-normal'}`}>{item.title}</span>
-      {!tool && (
-        <ChevronRightIcon className="w-3.5 h-3.5 shrink-0 text-label-tertiary/45 transition-opacity group-hover:text-label-tertiary/70" />
+      {!tool && isSelected && (
+        <ChevronRightIcon className="w-3.5 h-3.5 shrink-0 text-label-tertiary/70" />
       )}
     </button>
   )
@@ -137,7 +137,7 @@ export function Sidebar(): React.ReactElement {
   const selectItem = useContentStore((s) => s.selectItem)
 
   return (
-    <aside className="flex flex-col h-full w-[300px] flex-shrink-0 bg-surface-sidebar border-r border-surface-border">
+    <aside className="flex flex-col h-full w-[268px] flex-shrink-0 bg-surface-sidebar border-r border-surface-border">
       <div className="px-3.5 pt-4 pb-3.5 border-surface-border drag-region shrink-0">
         <div className="flex items-center gap-3.5 no-drag">
           <KnowHubLogoMark className="h-[52px] w-[52px] shrink-0 text-white" />

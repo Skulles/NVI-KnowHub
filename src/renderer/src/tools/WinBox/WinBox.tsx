@@ -2,24 +2,32 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { createPortal } from 'react-dom'
 import { ArrowDownTrayIcon, CheckIcon, ClipboardDocumentIcon, DiceIcon, RouterIcon, XMarkIcon } from '../../components/Icons'
 import { useWinboxStore } from '../../store/winbox'
+import ltapMiniLteKitImage from '../../assets/devices/mikrotik-ltap-mini-lte-kit.png'
 
 const MIKROTIK_CONFIG_DEVICES = [
   {
     id: 'ltap-mini-lte-kit',
     label: 'LtAP mini',
-    image: '/devices/mikrotik-ltap-mini-lte-kit.png',
+    image: ltapMiniLteKitImage,
   },
   // {
   //   id: 'groovea-52',
   //   label: 'GrooveA 52 / Metal 52 ac',
-  //   image: '/devices/mikrotik-groovea-52.png',
+  //   image: groovea52Image,
   // },
   // {
   //   id: 'mantbox-ax-15s',
   //   label: 'mANTBox ax 15s',
-  //   image: '/devices/mikrotik-mantbox-ax-15s.png',
+  //   image: mantboxAx15sImage,
   // },
 ] as const
+
+function preloadDeviceImages(): void {
+  for (const device of MIKROTIK_CONFIG_DEVICES) {
+    const img = new Image()
+    img.src = device.image
+  }
+}
 
 function owlDigitsToLanAddress(digits: string): { ip: string; net: string } | null {
   if (!/^\d{4}$/.test(digits)) return null
@@ -838,6 +846,8 @@ function MikrotikConfigGenerator() {
               <img
                 src={device?.image}
                 alt=""
+                loading="eager"
+                decoding="async"
                 className="relative h-11 w-11 shrink-0 object-contain"
                 draggable={false}
               />
@@ -1156,6 +1166,8 @@ function MikrotikConfigGenerator() {
                 <img
                   src={d.image}
                   alt=""
+                  loading="eager"
+                  decoding="async"
                   className="max-h-full w-full max-w-full object-contain object-center select-none"
                   draggable={false}
                 />
@@ -1208,6 +1220,10 @@ export function WinBox() {
       bundledExpectedName: info.bundledExpectedName
     })
   }, [setResult])
+
+  useEffect(() => {
+    preloadDeviceImages()
+  }, [])
 
   useEffect(() => {
     if (checkStatus !== 'idle' || !window.api) return

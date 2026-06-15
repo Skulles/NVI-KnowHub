@@ -47,6 +47,38 @@ console.log(`[electron-builder] publish.url → ${releasesUrl}`)
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
+  appId: 'com.nvi.knowhub',
+  productName: 'NVI KnowHub',
+  directories: {
+    buildResources: 'build'
+  },
+  files: [
+    'out'
+  ],
+  extraResources: [
+    {
+      from: 'build/icon.png',
+      to: 'icon.png'
+    },
+    {
+      from: 'resources/content',
+      to: 'content'
+    },
+    {
+      from: 'resources/winbox',
+      to: 'winbox'
+    }
+  ],
+  win: {
+    target: 'nsis'
+  },
+  mac: {
+    // Squirrel.Mac / electron-updater скачивает .zip для in-place update; один .dmg ломает автообновление.
+    target: ['dmg', 'zip']
+  },
+  linux: {
+    target: 'AppImage'
+  },
   publish: {
     provider: 'generic',
     url: releasesUrl

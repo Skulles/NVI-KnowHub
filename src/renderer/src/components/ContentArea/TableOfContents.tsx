@@ -9,15 +9,38 @@ interface TocEntry {
 function slugify(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^\w\s-]/g, '')
     .trim()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80)
+}
+
+function uniqueHeadingId(baseId: string, index: number, usedIds: Set<string>): string {
+  let candidate = baseId || `section-${index + 1}`
+  if (!usedIds.has(candidate)) {
+    usedIds.add(candidate)
+    return candidate
+  }
+
+  let suffix = 2
+  while (usedIds.has(`${baseId}-${suffix}`)) suffix++
+  const unique = `${baseId}-${suffix}`
+  usedIds.add(unique)
+  return unique
+}
+
+export function articleHasToc(bodyHtml: string): boolean {
+  return (bodyHtml.match(/<h[23]\b/gi)?.length ?? 0) >= 2
 }
 
 export function TableOfContents({
-  containerRef
+  containerRef,
+  contentKey
 }: {
   containerRef: React.RefObject<HTMLElement>
+  contentKey: string
 }): React.ReactElement | null {
   const [entries, setEntries] = useState<TocEntry[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -29,45 +52,68 @@ export function TableOfContents({
     const headings = Array.from(container.querySelectorAll<HTMLElement>('h2, h3'))
     const collected: TocEntry[] = []
 
-    headings.forEach((h) => {
-      if (!h.id) {
-        h.id = slugify(h.textContent ?? '')
-      }
+    const usedIds = new Set<string>()
+
+    headings.forEach((h, index) => {
+      const plainText = h.textContent ?? ''
+      const existingId = h.id.trim()
+      const slug = slugify(plainText)
+      const baseId = existingId && existingId === slug ? existingId : slug
+      const id = uniqueHeadingId(baseId, index, usedIds)
+      h.id = id
       const level = h.tagName === 'H2' ? 2 : 3
-      collected.push({ id: h.id, text: h.textContent ?? '', level })
+      collected.push({ id, text: plainText, level })
     })
 
     setEntries(collected)
-  }, [containerRef])
+  }, [containerRef, contentKey])
 
   useEffect(() => {
     const headingEls = entries.map((e) => document.getElementById(e.id)).filter(Boolean) as HTMLElement[]
     if (!headingEls.length) return
 
-    const observer = new IntersectionObserver(
-      (obs) => {
-        const visible = obs.filter((e) => e.isIntersecting)
-        if (visible.length) setActiveId(visible[0].target.id)
-      },
-      { rootMargin: '0px 0px -65% 0px', threshold: 0 }
-    )
+    const container = containerRef.current
+    const scrollRoot = container?.closest<HTMLElement>('main') ?? document.documentElement
+    let rafId = 0
 
-    headingEls.forEach((el) => observer.observe(el))
-    return () => observer.disconnect()
-  }, [entries])
+    const measureActive = (): void => {
+      const rootTop = scrollRoot === document.documentElement
+        ? 0
+        : scrollRoot.getBoundingClientRect().top
+      const activationLine = rootTop + 132
+
+      let next = headingEls[0].id
+      for (const heading of headingEls) {
+        if (heading.getBoundingClientRect().top <= activationLine) {
+          next = heading.id
+        } else {
+          break
+        }
+      }
+      setActiveId((prev) => (prev === next ? prev : next))
+    }
+
+    const updateActive = (): void => {
+      cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(measureActive)
+    }
+
+    updateActive()
+    scrollRoot.addEventListener('scroll', updateActive, { passive: true })
+    window.addEventListener('resize', updateActive)
+
+    return () => {
+      cancelAnimationFrame(rafId)
+      scrollRoot.removeEventListener('scroll', updateActive)
+      window.removeEventListener('resize', updateActive)
+    }
+  }, [containerRef, entries])
 
   if (entries.length < 2) return null
 
   return (
-    <nav
-      aria-label="Содержание"
-      className="sticky top-8 ml-8 hidden w-[13rem] shrink-0 xl:block"
-      style={{ maxHeight: 'calc(100vh - 4rem)', overflowY: 'auto' }}
-    >
-      <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.1em] text-label-tertiary">
-        Содержание
-      </p>
-      <ul className="space-y-0.5">
+    <nav aria-label="Содержание" className="article-toc">
+      <ul className="article-toc__list">
         {entries.map((entry) => (
           <li key={entry.id}>
             <a
@@ -77,16 +123,13 @@ export function TableOfContents({
                 document.getElementById(entry.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                 setActiveId(entry.id)
               }}
-              className={`
-                block rounded-md py-1 text-[12px] leading-snug transition-colors duration-100
-                ${entry.level === 3 ? 'pl-3 text-[11.5px]' : 'pl-0'}
-                ${activeId === entry.id
-                  ? 'text-tint-blue'
-                  : 'text-label-tertiary hover:text-label-secondary'
-                }
-              `}
+              className={[
+                'article-toc__link',
+                entry.level === 3 ? 'article-toc__link--nested' : '',
+                activeId === entry.id ? 'is-active' : ''
+              ].filter(Boolean).join(' ')}
             >
-              {entry.text}
+              <span className="article-toc__text">{entry.text}</span>
             </a>
           </li>
         ))}

@@ -215,11 +215,17 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
       hydrationRef.current = false
       currentIdRef.current = newArticleId()
       dirtyRef.current = true
+      setTitle('')
+      setLead('')
       setPublished(false)
       setPublishedAt(null)
       setUpdatedAt(null)
       setHtmlFile('')
       setHasUnpublishedChanges(false)
+      setStatus(null)
+      editor.replaceBlocks(editor.document, [
+        { type: 'paragraph', content: '' }
+      ] as Parameters<typeof editor.replaceBlocks>[1])
       return
     }
     hydrationRef.current = true

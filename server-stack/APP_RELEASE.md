@@ -84,8 +84,9 @@ ls -la dist
 
 Для macOS обычно нужны:
 
-- `*.dmg`
-- `latest-mac.yml`
+- `*.dmg` — для ручной установки
+- `*.zip` — **обязателен** для автообновления (`electron-updater` не умеет обновляться из `.dmg`)
+- `latest-mac.yml` — внутри должен быть URL на `.zip`, не на `.dmg`
 
 Для Linux обычно нужны:
 
@@ -105,6 +106,7 @@ scp dist/*.yml root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
 scp dist/*.blockmap root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
 scp dist/*.exe root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
 scp dist/*.dmg root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
+scp dist/*.zip root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
 scp dist/*.AppImage root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
 ```
 
@@ -121,6 +123,7 @@ rsync -av \
   --include='*.blockmap' \
   --include='*.exe' \
   --include='*.dmg' \
+  --include='*.zip' \
   --include='*.AppImage' \
   --exclude='*' \
   dist/ root@apps.shikarno.space:/var/lib/nvi-knowhub/releases/
@@ -155,8 +158,15 @@ files:
 
 Если имя установщика в `latest.yml` не совпадает с файлом на сервере, автообновление не сможет скачать релиз.
 
+```bash
+curl -fsSL https://apps.shikarno.space/nvi/knowhub/releases/latest-mac.yml
+```
+
+В `files[0].url` должен быть `.zip`, например `NVI KnowHub-1.0.3-mac.zip`. Если там только `.dmg`, автообновление на macOS выдаст `ZIP file not provided`.
+
 ## Частые проблемы
 
+- Если на macOS ошибка `ZIP file not provided`, пересоберите с `target: ['dmg', 'zip']` и загрузите на сервер и `.zip`, и обновлённый `latest-mac.yml`.
 - Если `npm run build` падает на `content:pull`, проверь что `https://apps.shikarno.space/nvi/knowhub/content/manifest.json` открывается.
 - Если приложение не видит обновление, проверь что версия в `package.json` больше установленной версии.
 - Если обновление найдено, но не скачивается, проверь что установщик и `.blockmap` реально лежат в `/var/lib/nvi-knowhub/releases`.

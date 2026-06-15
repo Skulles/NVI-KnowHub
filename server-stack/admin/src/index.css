@@ -121,6 +121,18 @@
     @apply hover:bg-sidebar-hover;
   }
 
+  .admin-drag-handle {
+    @apply shrink-0 cursor-grab text-label-tertiary opacity-0 group-hover:opacity-70 hover:!opacity-100 active:cursor-grabbing;
+  }
+
+  .admin-drag-over {
+    @apply ring-1 ring-tint-blue/45 bg-tint-blue/10;
+  }
+
+  .admin-dragging {
+    @apply opacity-45;
+  }
+
   .admin-breadcrumb {
     @apply flex items-center gap-1 min-w-0 text-[12px] text-label-tertiary;
   }

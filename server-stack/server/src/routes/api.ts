@@ -11,6 +11,7 @@ import { blocksToArticleHtml, BNBlock } from '../html-renderer.js'
 import {
   readManifest, writeManifest,
   upsertArticleInManifest, removeArticleFromManifest,
+  reorderArticlesInManifest,
   Manifest, ManifestItem
 } from '../manifest.js'
 import { titleToHtmlFile } from '../utils.js'
@@ -29,6 +30,7 @@ interface DraftRecord {
   subsectionId: string
   subsectionTitle: string
   htmlFile: string
+  sortOrder?: number
 }
 
 const UPLOAD_EXTENSIONS: Record<string, string> = {
@@ -217,7 +219,8 @@ function articleMetaFromDraft(raw: DraftRecord): Record<string, unknown> {
     hasUnpublishedChanges: hasUnpublishedChanges(raw),
     htmlFile: raw.htmlFile,
     sectionId: raw.sectionId ?? '',
-    subsectionId: raw.subsectionId ?? ''
+    subsectionId: raw.subsectionId ?? '',
+    sortOrder: raw.sortOrder
   }
 }
 
@@ -233,6 +236,93 @@ function findManifestItem(manifest: Manifest, id: string): { item: ManifestItem;
     }
   }
   return null
+}
+
+function listAllDrafts(draftsDir: string): DraftRecord[] {
+  mkdirSync(draftsDir, { recursive: true })
+  return readdirSync(draftsDir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => normalizeDraft(JSON.parse(readFileSync(join(draftsDir, f), 'utf8')) as DraftRecord))
+}
+
+function listDraftsInDivision(
+  draftsDir: string,
+  sectionId: string,
+  subsectionId: string
+): DraftRecord[] {
+  return listAllDrafts(draftsDir).filter(
+    (draft) => draft.sectionId === sectionId && draft.subsectionId === subsectionId
+  )
+}
+
+function getManifestArticleOrder(
+  manifest: Manifest,
+  sectionId: string,
+  subsectionId?: string
+): Record<string, number> {
+  const section = manifest.sections.find((s) => s.id === sectionId)
+  if (!section) return {}
+  const items = subsectionId
+    ? (section.subsections?.find((s) => s.id === subsectionId)?.items ?? [])
+    : (section.items ?? [])
+  const order: Record<string, number> = {}
+  items.forEach((item, index) => {
+    order[item.id] = index
+  })
+  return order
+}
+
+function getNextSortOrder(
+  draftsDir: string,
+  sectionId: string,
+  subsectionId: string
+): number {
+  const drafts = listDraftsInDivision(draftsDir, sectionId, subsectionId)
+  const orders = drafts
+    .map((draft) => draft.sortOrder)
+    .filter((value): value is number => typeof value === 'number')
+  if (orders.length > 0) return Math.max(...orders) + 1
+  return drafts.length
+}
+
+function getOrderedArticleIdsForDivision(
+  draftsDir: string,
+  manifest: Manifest,
+  sectionId: string,
+  subsectionId?: string
+): string[] {
+  const manifestOrder = getManifestArticleOrder(manifest, sectionId, subsectionId)
+  const subsectionKey = subsectionId ?? ''
+  return listDraftsInDivision(draftsDir, sectionId, subsectionKey).sort((a, b) => {
+    const orderA = a.sortOrder ?? manifestOrder[a.id] ?? Number.MAX_SAFE_INTEGER
+    const orderB = b.sortOrder ?? manifestOrder[b.id] ?? Number.MAX_SAFE_INTEGER
+    if (orderA !== orderB) return orderA - orderB
+    return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()
+  }).map((draft) => draft.id)
+}
+
+function getOrderedPublishedArticleIds(
+  draftsDir: string,
+  manifest: Manifest,
+  sectionId: string,
+  subsectionId?: string
+): string[] {
+  const manifestOrder = getManifestArticleOrder(manifest, sectionId, subsectionId)
+  const publishedIds = new Set(Object.keys(manifestOrder))
+  return getOrderedArticleIdsForDivision(draftsDir, manifest, sectionId, subsectionId).filter((id) =>
+    publishedIds.has(id)
+  )
+}
+
+function syncManifestOrderFromDrafts(
+  draftsDir: string,
+  manifest: Manifest,
+  sectionId: string,
+  subsectionId?: string
+): void {
+  const orderedIds = getOrderedPublishedArticleIds(draftsDir, manifest, sectionId, subsectionId)
+  if (orderedIds.length === 0) return
+  reorderArticlesInManifest(manifest, sectionId, subsectionId, orderedIds)
 }
 
 export function createApiRouter(draftsDir: string, contentDir: string): Router {
@@ -277,6 +367,8 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
 
     const existing = readDraft(draftsDir, id)
     const htmlFile = resolveHtmlFile(body.title, id, contentDir, draftsDir)
+    const sectionId = body.sectionId ?? existing?.sectionId ?? ''
+    const subsectionId = body.subsectionId ?? existing?.subsectionId ?? ''
 
     const draftBlocks = normalizeDraftMediaUploads(body.blocks, contentDir)
     const draft: DraftRecord = {
@@ -287,12 +379,15 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
       updatedAt: new Date().toISOString(),
       published: existing?.published ?? false,
       publishedAt: existing?.publishedAt ?? null,
-      sectionId: body.sectionId ?? existing?.sectionId ?? '',
+      sectionId,
       sectionTitle: body.sectionTitle ?? existing?.sectionTitle ?? '',
       sectionIcon: body.sectionIcon ?? existing?.sectionIcon ?? 'book',
-      subsectionId: body.subsectionId ?? existing?.subsectionId ?? '',
+      subsectionId,
       subsectionTitle: body.subsectionTitle ?? existing?.subsectionTitle ?? '',
-      htmlFile
+      htmlFile,
+      sortOrder:
+        existing?.sortOrder ??
+        (sectionId ? getNextSortOrder(draftsDir, sectionId, subsectionId) : undefined)
     }
 
     writeFileSync(join(draftsDir, `${id}.json`), JSON.stringify(draft, null, 2), 'utf8')
@@ -320,6 +415,37 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
     }
 
     res.json({ url })
+  })
+
+  router.post('/articles/reorder', (req: Request, res: Response) => {
+    const body = req.body as {
+      sectionId?: string
+      subsectionId?: string
+      articleIds?: string[]
+    }
+    const { sectionId, subsectionId, articleIds } = body
+    if (!sectionId || !Array.isArray(articleIds)) {
+      res.status(400).json({ error: 'Invalid request' })
+      return
+    }
+
+    mkdirSync(draftsDir, { recursive: true })
+    for (let i = 0; i < articleIds.length; i++) {
+      const id = articleIds[i]
+      const draft = readDraft(draftsDir, id)
+      if (!draft) continue
+      writeFileSync(
+        join(draftsDir, `${id}.json`),
+        JSON.stringify({ ...draft, sortOrder: i }, null, 2),
+        'utf8'
+      )
+    }
+
+    const manifest = readManifest(contentDir)
+    reorderArticlesInManifest(manifest, sectionId, subsectionId || undefined, articleIds)
+    writeManifest(contentDir, manifest)
+
+    res.json({ ok: true })
   })
 
   router.post('/articles/:id/publish', (req, res) => {
@@ -351,15 +477,29 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
       subsectionId: draft.subsectionId || undefined,
       subsectionTitle: draft.subsectionTitle || undefined
     })
+    syncManifestOrderFromDrafts(
+      draftsDir,
+      manifest,
+      draft.sectionId,
+      draft.subsectionId || undefined
+    )
     writeManifest(contentDir, manifest)
 
     const publishedAt = new Date().toISOString()
+    const orderedIds = getOrderedArticleIdsForDivision(
+      draftsDir,
+      manifest,
+      draft.sectionId,
+      draft.subsectionId || undefined
+    )
+    const sortOrder = orderedIds.indexOf(draft.id)
     const updatedDraft: DraftRecord = {
       ...draft,
       htmlFile,
       published: true,
       publishedAt,
-      updatedAt: publishedAt
+      updatedAt: publishedAt,
+      sortOrder: sortOrder >= 0 ? sortOrder : draft.sortOrder
     }
     writeFileSync(path, JSON.stringify(updatedDraft, null, 2), 'utf8')
 

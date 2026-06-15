@@ -101,3 +101,45 @@ export function removeArticleFromManifest(manifest: Manifest, id: string): void 
     }
   }
 }
+
+export function reorderArticlesInManifest(
+  manifest: Manifest,
+  sectionId: string,
+  subsectionId: string | undefined,
+  articleIds: string[]
+): void {
+  const section = manifest.sections.find((s) => s.id === sectionId)
+  if (!section) return
+
+  const reorderItems = (items: ManifestItem[]): ManifestItem[] => {
+    const byId = new Map(items.map((item) => [item.id, item]))
+    const reordered = articleIds
+      .map((id) => byId.get(id))
+      .filter((item): item is ManifestItem => !!item)
+    const remaining = items.filter((item) => !articleIds.includes(item.id))
+    return [...reordered, ...remaining]
+  }
+
+  if (subsectionId) {
+    const sub = section.subsections?.find((s) => s.id === subsectionId)
+    if (sub) sub.items = reorderItems(sub.items)
+  } else if (section.items) {
+    section.items = reorderItems(section.items)
+  }
+}
+
+export function reorderSubsectionsInManifest(
+  manifest: Manifest,
+  sectionId: string,
+  subsectionIds: string[]
+): void {
+  const section = manifest.sections.find((s) => s.id === sectionId)
+  if (!section?.subsections) return
+
+  const byId = new Map(section.subsections.map((sub) => [sub.id, sub]))
+  const reordered = subsectionIds
+    .map((id) => byId.get(id))
+    .filter((sub): sub is Subsection => !!sub)
+  const remaining = section.subsections.filter((sub) => !subsectionIds.includes(sub.id))
+  section.subsections = [...reordered, ...remaining]
+}

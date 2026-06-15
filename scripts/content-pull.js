@@ -4,11 +4,9 @@
 // Usage: node scripts/content-pull.js
 //        KNOWHUB_SERVER_URL=https://myserver.com node scripts/content-pull.js
 
-import { mkdirSync, writeFileSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+const { mkdirSync, writeFileSync, readdirSync, unlinkSync } = require('fs')
+const { join, dirname } = require('path')
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = join(__dirname, '..', 'resources', 'content')
 const SERVER_URL = (process.env.KNOWHUB_SERVER_URL ?? 'https://YOUR_SERVER').replace(/\/$/, '')
 
@@ -48,12 +46,21 @@ async function main() {
   console.log('  manifest.json ✓')
 
   const htmlFiles = collectHtmlFiles(manifest.sections ?? [])
+  const keep = new Set(['manifest.json', ...htmlFiles])
+
+  mkdirSync(OUT_DIR, { recursive: true })
+  for (const name of readdirSync(OUT_DIR)) {
+    if (keep.has(name)) continue
+    unlinkSync(join(OUT_DIR, name))
+    console.log(`  removed stale ${name}`)
+  }
+
   for (const file of htmlFiles) {
     await download(`${SERVER_URL}/content/${file}`, join(OUT_DIR, file))
     console.log(`  ${file} ✓`)
   }
 
-  console.log(`Done — ${htmlFiles.length + 1} files written to resources/content/`)
+  console.log(`Done — ${htmlFiles.length + 1} files in resources/content/`)
 }
 
 main().catch((err) => {

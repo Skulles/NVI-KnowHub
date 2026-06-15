@@ -4,7 +4,7 @@ import { attachArticleCodeHints } from '../../lib/article-code-hints'
 import { useContentStore } from '../../store/content'
 import { getToolComponent } from '../../tools/registry'
 import { BookIcon } from '../Icons'
-import { TableOfContents } from './TableOfContents'
+import { TableOfContents, articleHasToc } from './TableOfContents'
 
 function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHtml: string } {
   let rest = html.replace(/^\s*<h1\b[^>]*>[\s\S]*?<\/h1>/i, '').trim()
@@ -25,11 +25,103 @@ function useArticleEnhancements(ref: React.RefObject<HTMLElement>, contentKey: s
     if (!container) return
     const cleanupCopy = attachArticleCodeCopyButtons(container)
     const cleanupHints = attachArticleCodeHints(container)
+    const cleanupLinks = attachExternalLinks(container)
+    const cleanupMedia = attachArticleMedia(container)
     return () => {
       cleanupCopy()
       cleanupHints()
+      cleanupLinks()
+      cleanupMedia()
     }
   }, [ref, contentKey])
+}
+
+function isExternalHref(href: string): boolean {
+  return /^(https?:|mailto:|tel:)/i.test(href)
+}
+
+function attachExternalLinks(container: HTMLElement): () => void {
+  const cleanups: (() => void)[] = []
+
+  container.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((link) => {
+    const href = link.getAttribute('href') ?? ''
+    if (!isExternalHref(href)) return
+
+    link.target = '_blank'
+    link.rel = 'noreferrer'
+
+    const onClick = (event: MouseEvent): void => {
+      event.preventDefault()
+      void window.api?.openExternal(link.href)
+    }
+
+    link.addEventListener('click', onClick)
+    cleanups.push(() => link.removeEventListener('click', onClick))
+  })
+
+  return () => cleanups.forEach((fn) => fn())
+}
+
+function attachArticleMedia(container: HTMLElement): () => void {
+  const cleanups: (() => void)[] = []
+
+  container.querySelectorAll<HTMLImageElement | HTMLVideoElement>('img, video').forEach((media) => {
+    const wrapper = media.closest<HTMLElement>('.article-image-wrap, .article-video-wrap')
+    if (!wrapper) return
+
+    wrapper.classList.remove('is-loading', 'is-error')
+
+    const markLoaded = (): void => wrapper.classList.remove('is-loading')
+    const markError = (): void => {
+      wrapper.classList.remove('is-loading')
+      wrapper.classList.add('is-error')
+    }
+
+    if (media instanceof HTMLImageElement) {
+      if (media.complete) {
+        markLoaded()
+      } else {
+        wrapper.classList.add('is-loading')
+        media.addEventListener('load', markLoaded)
+        media.addEventListener('error', markError)
+        cleanups.push(() => {
+          media.removeEventListener('load', markLoaded)
+          media.removeEventListener('error', markError)
+        })
+      }
+      return
+    }
+
+    media.muted = true
+    media.loop = true
+    media.autoplay = true
+    media.playsInline = true
+    media.controls = false
+    media.disablePictureInPicture = true
+
+    const play = (): void => {
+      void media.play().catch(() => {
+        // Autoplay can still be delayed by the engine; keep the skeleton off once data is ready.
+      })
+    }
+
+    if (media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      markLoaded()
+      play()
+    } else {
+      wrapper.classList.add('is-loading')
+      media.addEventListener('loadeddata', markLoaded)
+      media.addEventListener('canplay', play)
+      media.addEventListener('error', markError)
+      cleanups.push(() => {
+        media.removeEventListener('loadeddata', markLoaded)
+        media.removeEventListener('canplay', play)
+        media.removeEventListener('error', markError)
+      })
+    }
+  })
+
+  return () => cleanups.forEach((fn) => fn())
 }
 
 function ArticleDocument({ html, title }: { html: string; title: string }): React.ReactElement {
@@ -39,13 +131,13 @@ function ArticleDocument({ html, title }: { html: string; title: string }): Reac
   useArticleEnhancements(articleRef, bodyHtml)
 
   return (
-    <div className="flex items-start">
-      <div className="min-w-0 flex-1">
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,54rem)_11rem] xl:justify-center">
+      <div className="min-w-0">
         <header className="mb-9 px-0.5">
           <h1 className="text-[1.8125rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.1]">{title}</h1>
           {leadInner && (
             <p
-              className="mt-5 text-[15px] leading-[1.62] text-label-secondary [&_strong]:font-medium [&_strong]:text-label-primary/88"
+              className="article-lead mt-5 text-[15px] leading-[1.62] [&_strong]:font-semibold [&_strong]:text-label-primary"
               dangerouslySetInnerHTML={{ __html: leadInner }}
             />
           )}
@@ -56,7 +148,7 @@ function ArticleDocument({ html, title }: { html: string; title: string }): Reac
           dangerouslySetInnerHTML={{ __html: bodyHtml }}
         />
       </div>
-      <TableOfContents containerRef={articleRef} />
+      <TableOfContents containerRef={articleRef} contentKey={bodyHtml} />
     </div>
   )
 }
@@ -97,6 +189,50 @@ function EmptyState(): React.ReactElement {
   )
 }
 
+function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElement {
+  return (
+    <div
+      className="article-loading grid items-start gap-4 xl:grid-cols-[minmax(0,54rem)_11rem] xl:justify-center"
+      aria-busy
+      aria-label="Загрузка статьи"
+    >
+      <div className="min-w-0">
+        <header className="mb-9 px-0.5">
+          <h1 className="text-[1.8125rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.1]">
+            {title}
+          </h1>
+          <div className="mt-5 space-y-2.5">
+            <div className="article-loading__block article-loading__line w-[94%]" />
+            <div className="article-loading__block article-loading__line w-[72%]" />
+          </div>
+        </header>
+
+        <div className="space-y-3 pb-10">
+          <div className="article-loading__block article-loading__line w-[42%]" />
+          <div className="article-loading__block article-loading__row w-full" />
+          <div className="article-loading__block article-loading__row w-full" />
+          <div className="article-loading__block article-loading__row w-[88%]" />
+          <div className="article-loading__block article-loading__line w-[36%] mt-2" />
+          <div className="article-loading__block article-loading__row w-full" />
+          <div className="article-loading__block article-loading__row w-[92%]" />
+        </div>
+      </div>
+
+      <aside className="hidden xl:block" aria-hidden>
+        <div className="sticky top-24 space-y-3 pl-1">
+          {[0.92, 0.78, 0.85, 0.64].map((width, index) => (
+            <div
+              key={index}
+              className="article-loading__block article-loading__toc-line"
+              style={{ width: `${width * 100}%` }}
+            />
+          ))}
+        </div>
+      </aside>
+    </div>
+  )
+}
+
 function LoadingState(): React.ReactElement {
   return (
     <div className="mx-auto max-w-xl animate-pulse rounded-2xl border border-surface-border/80 bg-surface-card/50 p-12 shadow-sheet" aria-busy aria-label="Загрузка">
@@ -113,6 +249,12 @@ function LoadingState(): React.ReactElement {
 export function ContentArea(): React.ReactElement {
   const { selectedItem, articleHtml, loading } = useContentStore()
 
+  const articleShowsToc =
+    !loading &&
+    selectedItem?.type === 'article' &&
+    !!articleHtml &&
+    articleHasToc(parseArticleHtml(articleHtml).bodyHtml)
+
   return (
     <main className="relative flex min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-surface-window">
       <div
@@ -120,8 +262,14 @@ export function ContentArea(): React.ReactElement {
         aria-hidden
       />
 
-      <div className="relative z-[1] mx-auto w-full max-w-[58rem] px-6 py-12 sm:px-10 sm:py-14 lg:pl-14 lg:pr-12">
-        {loading && <LoadingState />}
+      <div
+        className={`relative z-[1] mx-auto w-full max-w-[78rem] px-6 py-12 sm:px-10 sm:py-14 lg:pl-14 lg:pr-12${articleShowsToc ? ' xl:pr-6' : ''}`}
+      >
+        {loading && selectedItem?.type === 'article' && (
+          <ArticleLoadingSkeleton title={selectedItem.title} />
+        )}
+
+        {loading && selectedItem?.type !== 'article' && <LoadingState />}
 
         {!loading && !selectedItem && <EmptyState />}
 

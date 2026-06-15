@@ -92,21 +92,31 @@ export const useContentStore = create<ContentStore>((set) => ({
   setInstructionsRefresh: (instructionsRefresh) => set({ instructionsRefresh }),
 
   selectItem: async (item) => {
-    set({ selectedItem: item, articleHtml: null, loading: true })
+    const { selectedItem } = useContentStore.getState()
+    const isSameItem = selectedItem?.id === item.id
 
     if (item.type === 'tool') {
-      set({ loading: false })
+      set({ selectedItem: item, articleHtml: null, loading: false })
       return
     }
 
     if (!item.htmlFile) {
-      set({ loading: false })
+      set({ selectedItem: item, loading: false })
       return
     }
 
-    const html = window.api ? await window.api.getArticleHtml(item.htmlFile) : null
+    if (!isSameItem) {
+      set({ selectedItem: item, articleHtml: null, loading: true })
+    }
 
-    set({ articleHtml: html ?? '<p>Статья не найдена.</p>', loading: false })
+    const html = window.api ? await window.api.getArticleHtml(item.htmlFile) : null
+    const nextHtml = html ?? '<p>Статья не найдена.</p>'
+
+    set((state) => ({
+      selectedItem: item,
+      articleHtml: nextHtml === state.articleHtml ? state.articleHtml : nextHtml,
+      loading: false
+    }))
   }
 }))
 
@@ -123,8 +133,13 @@ export async function initContentStore(): Promise<void> {
 
   useContentStore.getState().setManifest(withTools(manifest))
 
-  const firstItem = flattenManifestItems(manifest)[0]
-  if (firstItem) {
-    await useContentStore.getState().selectItem(firstItem)
+  const state = useContentStore.getState()
+  const items = flattenManifestItems(manifest)
+  const keepCurrent =
+    state.selectedItem && items.find((item) => item.id === state.selectedItem!.id)
+  const target = keepCurrent ?? items[0]
+
+  if (target) {
+    await useContentStore.getState().selectItem(target)
   }
 }

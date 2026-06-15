@@ -2,14 +2,12 @@
 // Downloads WinBox for Windows from MikroTik (WinBox_Windows.zip), extracts exe into resources/winbox/
 // Usage: WINBOX_DOWNLOAD_VERSION=4.1 node scripts/download-winbox.js
 
-import { mkdirSync, createWriteStream, mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
-import https from 'https'
-import AdmZip from 'adm-zip'
+const { mkdirSync, createWriteStream, mkdtempSync, rmSync, writeFileSync } = require('fs')
+const { tmpdir } = require('os')
+const { join, dirname } = require('path')
+const https = require('https')
+const AdmZip = require('adm-zip')
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = join(__dirname, '..', 'resources', 'winbox')
 /** Подкаталог на CDN, например 4.1 → …/routeros/winbox/4.1/WinBox_Windows.zip */
 const WINBOX_DOWNLOAD_VERSION =

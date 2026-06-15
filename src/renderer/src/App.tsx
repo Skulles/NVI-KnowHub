@@ -6,7 +6,12 @@ import { initContentStore, MIN_INSTRUCTIONS_REFRESH_MS, useContentStore } from '
 import { useUpdatesStore } from './store/updates'
 
 export default function App(): React.ReactElement {
-  const { setAppUpdateAvailable, setAppUpdateDownloaded } = useUpdatesStore()
+  const {
+    setAppUpdateAvailable,
+    setAppUpdateDownloaded,
+    setAppUpdateProgress,
+    setAppUpdateError
+  } = useUpdatesStore()
 
   useEffect(() => {
     initContentStore()
@@ -32,20 +37,30 @@ export default function App(): React.ReactElement {
       })()
     })
 
-    const offUpdateAvailable = window.api.onAppUpdateAvailable((version) => {
-      setAppUpdateAvailable(version)
+    const offUpdateAvailable = window.api.onAppUpdateAvailable(() => {
+      setAppUpdateAvailable()
+    })
+
+    const offUpdateProgress = window.api.onAppUpdateDownloadProgress((percent) => {
+      setAppUpdateProgress(percent)
     })
 
     const offUpdateDownloaded = window.api.onAppUpdateDownloaded(() => {
       setAppUpdateDownloaded()
     })
 
+    const offUpdateError = window.api.onAppUpdateError((message) => {
+      setAppUpdateError(message)
+    })
+
     return () => {
       offContent()
       offUpdateAvailable()
+      offUpdateProgress()
       offUpdateDownloaded()
+      offUpdateError()
     }
-  }, [setAppUpdateAvailable, setAppUpdateDownloaded])
+  }, [setAppUpdateAvailable, setAppUpdateDownloaded, setAppUpdateProgress, setAppUpdateError])
 
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-surface-window text-label-primary selection:bg-tint-blue/22">

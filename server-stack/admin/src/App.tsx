@@ -5,7 +5,7 @@ import { Editor } from './components/Editor'
 import { LoginScreen } from './components/LoginScreen'
 import { api, SectionTarget, setUnauthorizedHandler } from './api'
 
-type EditorView = { draftId: string | null } | null
+type EditorView = { draftId: string | null; sessionKey: number } | null
 type AuthState = 'loading' | 'guest' | 'authenticated'
 
 export default function App(): React.ReactElement {
@@ -51,18 +51,21 @@ function AdminApp({ onLogout }: { onLogout: () => void }): React.ReactElement {
   const activeArticleId = editorView && editorView.draftId ? editorView.draftId : null
   const isDraftNew = editorView !== null && editorView.draftId === null
 
-  const openArticle = (id: string): void => setEditorView({ draftId: id })
+  const openArticle = (id: string): void =>
+    setEditorView({ draftId: id, sessionKey: Date.now() })
 
   const openNewArticle = (): void => {
     if (!selectedTarget?.sectionId) return
-    setEditorView({ draftId: null })
+    setEditorView({ draftId: null, sessionKey: Date.now() })
   }
 
   const closeEditor = (): void => setEditorView(null)
 
   const handleArticleSaved = (id: string): void => {
     refresh()
-    setEditorView({ draftId: id })
+    setEditorView((prev) =>
+      prev ? { ...prev, draftId: id } : { draftId: id, sessionKey: Date.now() }
+    )
   }
 
   return (
@@ -95,6 +98,7 @@ function AdminApp({ onLogout }: { onLogout: () => void }): React.ReactElement {
         <div className="relative z-[1] flex-1 min-h-0 overflow-hidden flex flex-col">
           {editorView ? (
             <Editor
+              key={editorView.sessionKey}
               draftId={editorView.draftId}
               targetSection={selectedTarget}
               onTargetLoaded={setSelectedTarget}

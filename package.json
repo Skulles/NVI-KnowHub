@@ -1,6 +1,6 @@
 {
   "name": "nvi-knowhub",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "База знаний NVI",
   "main": "out/main/index.js",
   "scripts": {
@@ -41,38 +41,5 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.4"
-  },
-  "build": {
-    "appId": "com.nvi.knowhub",
-    "productName": "NVI KnowHub",
-    "directories": {
-      "buildResources": "build"
-    },
-    "files": [
-      "out"
-    ],
-    "extraResources": [
-      {
-        "from": "build/icon.png",
-        "to": "icon.png"
-      },
-      {
-        "from": "resources/content",
-        "to": "content"
-      },
-      {
-        "from": "resources/winbox",
-        "to": "winbox"
-      }
-    ],
-    "win": {
-      "target": "nsis"
-    },
-    "mac": {
-      "target": "dmg"
-    },
-    "linux": {
-      "target": "AppImage"
-    }
   }
 }

@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { setupUpdater } from './updater'
+import { setupUpdater, isQuittingForUpdate } from './updater'
 import { setupContentSync, getManifest, getArticleHtml } from './contentSync'
 import { setupWinbox } from './winbox'
 
@@ -65,10 +65,9 @@ app.whenReady().then(() => {
   ipcMain.handle('content:get-manifest', () => getManifest())
   ipcMain.handle('content:get-article-html', (_, htmlFile: string) => getArticleHtml(htmlFile))
   ipcMain.handle('app:get-version', () => app.getVersion())
-  ipcMain.on('app:install-update', () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { autoUpdater } = require('electron-updater')
-    autoUpdater.quitAndInstall()
+  ipcMain.handle('shell:open-external', async (_, url: string) => {
+    await shell.openExternal(url)
+    return { ok: true }
   })
 
   const mainWindow = createWindow()
@@ -78,6 +77,7 @@ app.whenReady().then(() => {
   setupWinbox()
 
   app.on('activate', function () {
+    if (isQuittingForUpdate()) return
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })

@@ -16,9 +16,13 @@ export interface ElectronAPI {
   getArticleHtml(htmlFile: string): Promise<string | null>
   getAppVersion(): Promise<string>
   onContentUpdated(cb: () => void): () => void
-  onAppUpdateAvailable(cb: (version: string) => void): () => void
+  onAppUpdateAvailable(cb: () => void): () => void
+  onAppUpdateDownloadProgress(cb: (percent: number) => void): () => void
   onAppUpdateDownloaded(cb: () => void): () => void
-  installAppUpdate(): void
+  onAppUpdateError(cb: (message: string) => void): () => void
+  startAppUpdateDownload(): Promise<{ ok: boolean; error?: string }>
+  installAppUpdate(): Promise<{ ok: boolean }>
+  openExternal(url: string): Promise<{ ok: boolean }>
   winboxOpen(): Promise<{ ok: boolean; error?: string }>
   winboxCheckUpdate(): Promise<WinboxUpdateInfo>
   /** Скачать WinBox с CDN MikroTik в resources/winbox/ (тот же путь, что для «Открыть»). */

@@ -15,9 +15,15 @@ const api: ElectronAPI = {
   },
 
   onAppUpdateAvailable: (cb) => {
-    const handler = (_: unknown, version: string): void => cb(version)
+    const handler = (): void => cb()
     ipcRenderer.on('app:update-available', handler)
     return () => ipcRenderer.off('app:update-available', handler)
+  },
+
+  onAppUpdateDownloadProgress: (cb) => {
+    const handler = (_: unknown, percent: number): void => cb(percent)
+    ipcRenderer.on('app:update-download-progress', handler)
+    return () => ipcRenderer.off('app:update-download-progress', handler)
   },
 
   onAppUpdateDownloaded: (cb) => {
@@ -26,7 +32,17 @@ const api: ElectronAPI = {
     return () => ipcRenderer.off('app:update-downloaded', handler)
   },
 
-  installAppUpdate: () => ipcRenderer.send('app:install-update'),
+  onAppUpdateError: (cb) => {
+    const handler = (_: unknown, message: string): void => cb(message)
+    ipcRenderer.on('app:update-error', handler)
+    return () => ipcRenderer.off('app:update-error', handler)
+  },
+
+  startAppUpdateDownload: () => ipcRenderer.invoke('app:start-update-download'),
+
+  installAppUpdate: () => ipcRenderer.invoke('app:install-update'),
+
+  openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
 
   winboxOpen: () => ipcRenderer.invoke('winbox:open'),
   winboxCheckUpdate: () => ipcRenderer.invoke('winbox:check-update'),

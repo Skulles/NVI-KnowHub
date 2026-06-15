@@ -65,6 +65,7 @@ export interface ArticleMeta {
   htmlFile: string
   sectionId: string
   subsectionId: string
+  sortOrder?: number
 }
 
 export interface ArticleDraft {
@@ -180,5 +181,10 @@ export const api = {
   deleteArticle: (id: string) => request<{ ok: boolean }>('DELETE', `/api/articles/${id}`),
   uploadFile: (dataUrl: string) => request<UploadFileResult>('POST', '/api/uploads', { dataUrl }),
   getManifest: () => request<Manifest>('GET', '/api/manifest'),
-  updateManifest: (manifest: Manifest) => request<{ ok: boolean }>('PUT', '/api/manifest', manifest)
+  updateManifest: (manifest: Manifest) => request<{ ok: boolean }>('PUT', '/api/manifest', manifest),
+  reorderArticles: (payload: {
+    sectionId: string
+    subsectionId?: string
+    articleIds: string[]
+  }) => request<{ ok: boolean }>('POST', '/api/articles/reorder', payload)
 }

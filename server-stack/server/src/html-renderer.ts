@@ -22,10 +22,25 @@ export interface BNBlock {
 function slugify(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^\w\s-]/g, '')
     .trim()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
     .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
     .slice(0, 80)
+}
+
+function uniqueHeadingId(text: string, index: number, usedIds: Set<string>): string {
+  const base = slugify(text) || `section-${index + 1}`
+  if (!usedIds.has(base)) {
+    usedIds.add(base)
+    return base
+  }
+  let suffix = 2
+  while (usedIds.has(`${base}-${suffix}`)) suffix++
+  const id = `${base}-${suffix}`
+  usedIds.add(id)
+  return id
 }
 
 function inlineToHtml(content: BNInlineContent[]): string {
@@ -126,7 +141,7 @@ function getListType(type: string): ListType | null {
   return null
 }
 
-function renderBlock(block: BNBlock): string {
+function renderBlock(block: BNBlock, usedHeadingIds?: Set<string>, headingIndex?: { value: number }): string {
   const content = block.content as BNInlineContent[]
 
   switch (block.type) {
@@ -136,7 +151,12 @@ function renderBlock(block: BNBlock): string {
     case 'heading': {
       const level = (block.props.level as number) ?? 2
       const text = inlineToHtml(content)
-      const id = slugify(content.map((c) => c.text ?? '').join(''))
+      const plain = content.map((c) => c.text ?? '').join('')
+      const index = headingIndex?.value ?? 0
+      if (headingIndex) headingIndex.value++
+      const id = usedHeadingIds
+        ? uniqueHeadingId(plain, index, usedHeadingIds)
+        : slugify(plain)
       return `<h${level} id="${id}">${text}</h${level}>`
     }
 
@@ -160,7 +180,7 @@ function renderBlock(block: BNBlock): string {
     case 'video': {
       const src = escHtml((block.props.url as string) ?? '')
       const caption = (block.props.caption as string) ?? ''
-      const video = `<video src="${src}" autoplay muted loop playsinline preload="auto"></video>`
+      const video = `<video autoplay muted loop playsinline preload="auto"><source src="${src}" type="video/mp4" /></video>`
       if (caption) {
         return `<figure class="article-video-wrap">${video}<figcaption>${escHtml(caption)}</figcaption></figure>`
       }
@@ -214,6 +234,8 @@ export function renderBlocks(blocks: BNBlock[]): string {
   const grouped = groupListBlocks(blocks)
   const parts: string[] = []
   let cardOpen = false
+  const usedHeadingIds = new Set<string>()
+  const headingIndex = { value: 0 }
 
   for (const item of grouped) {
     if ('items' in item) {
@@ -226,7 +248,7 @@ export function renderBlocks(blocks: BNBlock[]): string {
 
     if (block.type === 'heading' && (block.props.level as number) === 2) {
       if (cardOpen) parts.push('</section>')
-      const headingHtml = renderBlock(block)
+      const headingHtml = renderBlock(block, usedHeadingIds, headingIndex)
       parts.push(`<section class="article-section-card">${headingHtml}`)
       cardOpen = true
       continue
@@ -242,11 +264,11 @@ export function renderBlocks(blocks: BNBlock[]): string {
         parts.push('</section>')
         cardOpen = false
       }
-      parts.push(renderBlock(block))
+      parts.push(renderBlock(block, usedHeadingIds, headingIndex))
       continue
     }
 
-    parts.push(renderBlock(block))
+    parts.push(renderBlock(block, usedHeadingIds, headingIndex))
   }
 
   if (cardOpen) parts.push('</section>')
