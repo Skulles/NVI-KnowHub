@@ -411,7 +411,7 @@ export function Monitoring() {
         {error && <p className="mt-3 text-[13px] text-red-300">{error}</p>}
       </div>
 
-      {snapshot.objects.length ? (
+      {snapshot.objects.length > 0 ? (
         <div className="grid gap-4 xl:grid-cols-2">
           {snapshot.objects.map((object) => (
             <MonitoringObjectCard
@@ -424,9 +424,10 @@ export function Monitoring() {
           ))}
         </div>
       ) : (
-        <div className="rounded-2xl border border-dashed border-surface-border bg-surface-card/45 px-8 py-12 text-center shadow-sheet">
-          <p className="text-[16px] font-medium text-label-secondary">Добавьте первый объект</p>
-          <p className="mt-1.5 text-[14px] text-label-tertiary">Например: 0102</p>
+        <div className="flex min-h-[min(420px,calc(100vh-18rem))] items-center justify-center">
+          <p className="text-center text-[15px] font-medium text-label-tertiary">
+            Нет объектов для отслеживания
+          </p>
         </div>
       )}
     </article>
