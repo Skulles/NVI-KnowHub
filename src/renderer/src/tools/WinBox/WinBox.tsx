@@ -37,7 +37,7 @@ const MIKROTIK_CONFIG_DEVICES = [
   },
   {
     id: 'mantbox-ax-15s',
-    label: 'mANTBox ax 15s',
+    label: 'Wireless Wire nRAY',
     image: wirelessWireNrayImage,
     flow: 'groovea' as const,
     nameSlug: '',
@@ -45,7 +45,7 @@ const MIKROTIK_CONFIG_DEVICES = [
   },
   {
     id: 'wireless-wire-nray',
-    label: 'Wireless Wire nRAY',
+    label: 'mANTBox ax 15s',
     image: mantboxAxImage,
     flow: 'groovea' as const,
     nameSlug: '',
