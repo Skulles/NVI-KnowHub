@@ -11,6 +11,24 @@ export interface WinboxUpdateInfo {
   bundledExpectedName: string
 }
 
+export interface MonitoringPingTarget {
+  id: string
+  host: string
+  label: string
+}
+
+export type MonitoringPingStatus = 'online' | 'offline' | 'error'
+
+export interface MonitoringPingResult {
+  id: string
+  host: string
+  label: string
+  status: MonitoringPingStatus
+  latencyMs: number | null
+  checkedAt: number
+  error?: string
+}
+
 export interface ElectronAPI {
   getManifest(): Promise<ContentManifest | null>
   getArticleHtml(htmlFile: string): Promise<string | null>
@@ -28,4 +46,5 @@ export interface ElectronAPI {
   /** Скачать WinBox с CDN MikroTik в resources/winbox/ (тот же путь, что для «Открыть»). */
   winboxDownloadBundled(): Promise<{ ok: boolean; error?: string }>
   winboxOpenDownloadPage(): Promise<{ ok: boolean }>
+  monitoringPing(targets: MonitoringPingTarget[]): Promise<MonitoringPingResult[]>
 }

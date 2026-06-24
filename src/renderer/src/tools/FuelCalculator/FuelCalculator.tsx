@@ -59,7 +59,7 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-2xl bg-surface-card border border-surface-border overflow-hidden shadow-sheet">
       <header className="px-4 py-3 border-surface-border" style={{paddingBottom: 0}}>
-        <h2 className="m-0 text-[11px] font-semibold uppercase tracking-[0.1em] text-tint-blue">
+        <h2 className="m-0 text-[12px] font-semibold uppercase tracking-[0.1em] text-tint-blue">
           {title}
         </h2>
       </header>
@@ -81,12 +81,12 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-2 flex-1 min-w-0">
-      <span className="text-[13px] text-label-secondary">
+      <span className="text-[14px] text-label-secondary">
         {label}
       </span>
       <div className="flex items-center bg-surface-input/80 border border-surface-border/90 rounded-xl shadow-chromeTop focus-within:ring-2 focus-within:ring-tint-blue/50 focus-within:border-transparent transition-[box-shadow,border-color] duration-200">
         <input
-          className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-[14px] text-label-primary placeholder:text-label-tertiary/50 focus:outline-none"
+          className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-[15px] text-label-primary placeholder:text-label-tertiary/50 focus:outline-none"
           inputMode="decimal"
           type="text"
           value={value}
@@ -94,7 +94,7 @@ function Field({
           onFocus={() => { if (value === '0') onValueChange('') }}
           onBlur={() => { if (value === '') onValueChange('0') }}
         />
-        <span className="pr-3 text-[12px] font-medium text-label-tertiary whitespace-nowrap select-none">
+        <span className="pr-3 text-[13px] font-medium text-label-tertiary whitespace-nowrap select-none">
           {suffix}
         </span>
       </div>
@@ -123,17 +123,17 @@ function ResultRow({
       className={`flex items-baseline justify-between gap-3 py-3 ${last ? '' : 'border-b border-surface-divider'}`}
     >
       <dt
-        className={`text-[13px] leading-snug ${emphasis ? 'text-label-primary font-medium' : 'text-label-secondary'}`}
+        className={`text-[14px] leading-snug ${emphasis ? 'text-label-primary font-medium' : 'text-label-secondary'}`}
       >
         {label}
       </dt>
       <dd
-        className={`m-0 tabular-nums shrink-0 ${emphasis ? 'text-[18px] font-semibold' : 'text-[15px] font-medium'} ${valid ? (color ?? 'text-label-primary') : 'text-label-tertiary'}`}
+        className={`m-0 tabular-nums shrink-0 ${emphasis ? 'text-[19px] font-semibold' : 'text-[16px] font-medium'} ${valid ? (color ?? 'text-label-primary') : 'text-label-tertiary'}`}
       >
         {valid ? (
           <>
             {fmt(value)}{' '}
-            <span className="text-[11px] font-normal text-label-tertiary">{unit}</span>
+            <span className="text-[12px] font-normal text-label-tertiary">{unit}</span>
           </>
         ) : (
           '—'
@@ -185,10 +185,10 @@ export function FuelCalculator() {
       {/* ── header ── */}
       <header className="mb-8">
         
-        <h1 className="text-[1.5rem] font-semibold tracking-tighter text-label-primary mb-2">
+        <h1 className="text-[1.625rem] font-semibold tracking-tighter text-label-primary mb-2">
           Расчёт расхода топлива за смену
         </h1>
-        <p className="text-label-secondary text-[14px] leading-relaxed">
+        <p className="text-label-secondary text-[15px] leading-relaxed">
           Оценка расхода и ожидаемого остатка топлива в баке по нормам и заправкам.
         </p>
       </header>
@@ -283,7 +283,7 @@ export function FuelCalculator() {
           {/* Результат */}
           <section className="rounded-2xl bg-surface-card border border-surface-border overflow-hidden shadow-sheet">
             <header className="px-4 py-3 border-surface-border">
-              <h2 className="m-0 text-[11px] font-semibold uppercase tracking-[0.1em] text-tint-blue">
+              <h2 className="m-0 text-[12px] font-semibold uppercase tracking-[0.1em] text-tint-blue">
                 Результат
               </h2>
             </header>
@@ -313,11 +313,11 @@ export function FuelCalculator() {
               type="button"
               disabled={!Number.isFinite(out.endL)}
               onClick={carryOver}
-              className="w-full bg-tint-blue hover:bg-tint-blue-hover disabled:opacity-35 disabled:cursor-not-allowed text-white font-medium text-[14px] py-3 px-5 rounded-xl transition-all duration-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card"
+              className="w-full bg-tint-blue hover:bg-tint-blue-hover disabled:opacity-35 disabled:cursor-not-allowed text-white font-medium text-[15px] py-3 px-5 rounded-xl transition-all duration-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card"
             >
               Обновить данные для следующей смены
             </button>
-            <p className="m-0 text-[12px] text-label-tertiary leading-relaxed">
+            <p className="m-0 text-[13px] text-label-tertiary leading-relaxed">
               Показание одометра на конец смены переносится на начало смены, расчётный
               остаток топлива в объём в баке на начало смены.
             </p>
@@ -327,7 +327,7 @@ export function FuelCalculator() {
 
       {/* ── footer note ── */}
       <aside style={{marginBottom: '60px'}} className="mt-6 rounded-2xl border border-surface-border/80 bg-surface-card/40 px-5 py-4">
-        <p className="m-0 text-[13px] text-label-tertiary leading-relaxed">
+        <p className="m-0 text-[14px] text-label-tertiary leading-relaxed">
           Если фактические показания датчика уровня топлива или бортового компьютера сильно
           отличаются от ожидаемого остатка сделайте соответствующую пометку в путевом листе
           в разделе «экономия» или «перерасход».{' '}

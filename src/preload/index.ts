@@ -47,7 +47,9 @@ const api: ElectronAPI = {
   winboxOpen: () => ipcRenderer.invoke('winbox:open'),
   winboxCheckUpdate: () => ipcRenderer.invoke('winbox:check-update'),
   winboxDownloadBundled: () => ipcRenderer.invoke('winbox:download-bundled'),
-  winboxOpenDownloadPage: () => ipcRenderer.invoke('winbox:open-download-page')
+  winboxOpenDownloadPage: () => ipcRenderer.invoke('winbox:open-download-page'),
+
+  monitoringPing: (targets) => ipcRenderer.invoke('monitoring:ping', targets)
 }
 
 contextBridge.exposeInMainWorld('api', api)

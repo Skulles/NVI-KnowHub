@@ -1,10 +1,10 @@
-import React, { useMemo, useRef, useEffect } from 'react'
+import React, { useMemo, useRef, useLayoutEffect } from 'react'
 import { attachArticleCodeCopyButtons } from '../../lib/article-code-copy'
 import { attachArticleCodeHints } from '../../lib/article-code-hints'
 import { useContentStore } from '../../store/content'
 import { getToolComponent } from '../../tools/registry'
 import { BookIcon } from '../Icons'
-import { TableOfContents, articleHasToc } from './TableOfContents'
+import { ArticleToc, TocNav, articleHasToc, splitBodyAtFirstHeading } from './TableOfContents'
 
 function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHtml: string } {
   let rest = html.replace(/^\s*<h1\b[^>]*>[\s\S]*?<\/h1>/i, '').trim()
@@ -19,8 +19,8 @@ function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHt
   return { leadInner: undefined, bodyHtml: rest }
 }
 
-function useArticleEnhancements(ref: React.RefObject<HTMLElement>, contentKey: string): void {
-  useEffect(() => {
+function useArticleEnhancements(ref: React.RefObject<HTMLElement | null>, contentKey: string): void {
+  useLayoutEffect(() => {
     const container = ref.current
     if (!container) return
     const cleanupCopy = attachArticleCodeCopyButtons(container)
@@ -78,6 +78,7 @@ function attachArticleMedia(container: HTMLElement): () => void {
     }
 
     if (media instanceof HTMLImageElement) {
+      media.draggable = false
       if (media.complete) {
         markLoaded()
       } else {
@@ -126,30 +127,41 @@ function attachArticleMedia(container: HTMLElement): () => void {
 
 function ArticleDocument({ html, title }: { html: string; title: string }): React.ReactElement {
   const { leadInner, bodyHtml } = useMemo(() => parseArticleHtml(html), [html])
+  const bodySplit = useMemo(() => splitBodyAtFirstHeading(bodyHtml), [bodyHtml])
   const articleRef = useRef<HTMLElement>(null)
+  const contentWrapperRef = useRef<HTMLDivElement>(null)
 
-  useArticleEnhancements(articleRef, bodyHtml)
+  useArticleEnhancements(contentWrapperRef, bodyHtml)
 
   return (
-    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,54rem)_11rem] xl:justify-center">
-      <div className="min-w-0">
-        <header className="mb-9 px-0.5">
-          <h1 className="text-[1.8125rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.1]">{title}</h1>
-          {leadInner && (
-            <p
-              className="article-lead mt-5 text-[15px] leading-[1.62] [&_strong]:font-semibold [&_strong]:text-label-primary"
-              dangerouslySetInnerHTML={{ __html: leadInner }}
+    <ArticleToc containerRef={contentWrapperRef} contentKey={bodyHtml}>
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,54rem)_11rem] xl:justify-center">
+        <div ref={contentWrapperRef} className="article-view min-w-0">
+          <header className="mb-9 px-0.5">
+            <h1 className="text-[2rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.12]">{title}</h1>
+            {leadInner && (
+              <p
+                className="article-lead mt-5 text-[16px] leading-[1.64] [&_strong]:font-semibold [&_strong]:text-label-primary"
+                dangerouslySetInnerHTML={{ __html: leadInner }}
+              />
+            )}
+          </header>
+          {bodySplit?.before ? (
+            <div
+              className="article-body article-content max-w-none"
+              dangerouslySetInnerHTML={{ __html: bodySplit.before }}
             />
-          )}
-        </header>
-        <article
-          ref={articleRef}
-          className="article-body article-content max-w-none"
-          dangerouslySetInnerHTML={{ __html: bodyHtml }}
-        />
+          ) : null}
+          <TocNav variant="inline" />
+          <article
+            ref={articleRef}
+            className="article-body article-content max-w-none"
+            dangerouslySetInnerHTML={{ __html: bodySplit?.rest ?? bodyHtml }}
+          />
+        </div>
+        <TocNav variant="sidebar" />
       </div>
-      <TableOfContents containerRef={articleRef} contentKey={bodyHtml} />
-    </div>
+    </ArticleToc>
   )
 }
 
@@ -157,15 +169,21 @@ function ToolView({ toolId }: { toolId: string }): React.ReactElement {
   const Tool = getToolComponent(toolId)
   if (!Tool) {
     return (
-      <div className="rounded-2xl border border-surface-border bg-surface-card px-8 py-9 sm:px-10 sm:py-10 shadow-sheet ring-1 ring-surface-border/40">
-        <div className="py-12 text-center text-label-tertiary">
-          <p className="text-[15px] font-medium text-label-secondary">Инструмент не найден</p>
-          <p className="mt-1.5 font-mono text-[13px] opacity-75">ID: {toolId}</p>
+      <div className="tool-view">
+        <div className="rounded-2xl border border-surface-border bg-surface-card px-8 py-9 sm:px-10 sm:py-10 shadow-sheet ring-1 ring-surface-border/40">
+          <div className="py-12 text-center text-label-tertiary">
+            <p className="text-[16px] font-medium text-label-secondary">Инструмент не найден</p>
+            <p className="mt-1.5 font-mono text-[14px] opacity-75">ID: {toolId}</p>
+          </div>
         </div>
       </div>
     )
   }
-  return <Tool />
+  return (
+    <div className="tool-view">
+      <Tool />
+    </div>
+  )
 }
 
 function EmptyState(): React.ReactElement {
@@ -182,7 +200,7 @@ function EmptyState(): React.ReactElement {
       <p className="mb-2 text-center text-lg font-semibold tracking-tight text-label-primary">
         Выберите материал
       </p>
-      <p className="max-w-[26rem] text-center text-[14px] leading-relaxed text-label-secondary">
+      <p className="max-w-[26rem] text-center text-[15px] leading-relaxed text-label-secondary">
         Выберите пункт в дереве слева. Работа без подключения к сети.
       </p>
     </div>
@@ -198,7 +216,7 @@ function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElemen
     >
       <div className="min-w-0">
         <header className="mb-9 px-0.5">
-          <h1 className="text-[1.8125rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.1]">
+          <h1 className="text-[2rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.12]">
             {title}
           </h1>
           <div className="mt-5 space-y-2.5">
@@ -206,6 +224,19 @@ function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElemen
             <div className="article-loading__block article-loading__line w-[72%]" />
           </div>
         </header>
+
+        <aside className="mb-6 xl:hidden" aria-hidden>
+          <div className="article-loading__block h-3.5 w-24 mb-2.5" />
+          <div className="space-y-2.5">
+            {[0.92, 0.78, 0.85, 0.64].map((width, index) => (
+              <div
+                key={index}
+                className="article-loading__block article-loading__toc-line"
+                style={{ width: `${width * 100}%` }}
+              />
+            ))}
+          </div>
+        </aside>
 
         <div className="space-y-3 pb-10">
           <div className="article-loading__block article-loading__line w-[42%]" />

@@ -72,7 +72,7 @@ function ContentInstructionsToast({
       <div
         onTransitionEnd={onTransitionEnd}
         className={`pointer-events-auto flex max-w-lg items-center gap-3 rounded-xl border border-surface-border
-          bg-surface-sidebar/95 px-4 py-2.5 text-[13px] shadow-chromeTop backdrop-blur-xl ease-out will-change-transform
+          bg-surface-sidebar/95 px-4 py-2.5 text-[14px] shadow-chromeTop backdrop-blur-xl ease-out will-change-transform
           transition-[transform,opacity] duration-300
           ${panelOpen ? 'translate-y-0 opacity-100' : '-translate-y-[130%] opacity-0'}`}
       >
@@ -168,7 +168,7 @@ function WinboxUpdateToast({
       <div
         onTransitionEnd={onTransitionEnd}
         className={`pointer-events-auto flex max-w-lg items-center gap-3 rounded-xl border border-surface-border
-          bg-surface-sidebar/95 px-4 py-2.5 text-[13px] shadow-chromeTop backdrop-blur-xl ease-out will-change-transform
+          bg-surface-sidebar/95 px-4 py-2.5 text-[14px] shadow-chromeTop backdrop-blur-xl ease-out will-change-transform
           transition-[transform,opacity] duration-300
           ${panelOpen ? 'translate-y-0 opacity-100' : '-translate-y-[130%] opacity-0'}`}
       >
@@ -247,7 +247,7 @@ export function UpdateBanner(): React.ReactElement {
   return (
     <>
       {showBanner ? (
-        <div className="relative z-10 flex shrink-0 flex-col gap-2.5 border-b border-surface-border bg-surface-sidebar/95 px-5 py-2.5 text-[13px] shadow-chromeTop backdrop-blur-xl">
+        <div className="relative z-10 flex shrink-0 flex-col gap-2.5 border-b border-surface-border bg-surface-sidebar/95 px-5 py-2.5 text-[14px] shadow-chromeTop backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tint-blue/22 text-tint-blue">
               <ArrowPathIcon
@@ -266,7 +266,7 @@ export function UpdateBanner(): React.ReactElement {
                       : 'Доступно обновление приложения'}
               </p>
               {appUpdateError && !showProgress && (
-                <p className="m-0 mt-1 text-[11px] leading-snug text-red-400/90">{appUpdateError}</p>
+                <p className="m-0 mt-1 text-[12px] leading-snug text-red-400/90">{appUpdateError}</p>
               )}
             </div>
 
@@ -275,14 +275,14 @@ export function UpdateBanner(): React.ReactElement {
                 <button
                   type="button"
                   onClick={dismissAppUpdate}
-                  className="no-drag rounded-lg border border-surface-border px-3 py-1.5 text-[11px] font-medium tracking-tight text-label-secondary transition-colors duration-150 hover:bg-white/[0.04] hover:text-label-primary"
+                  className="no-drag rounded-lg border border-surface-border px-3 py-1.5 text-[12px] font-medium tracking-tight text-label-secondary transition-colors duration-150 hover:bg-white/[0.04] hover:text-label-primary"
                 >
                   Позже
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleStartUpdate()}
-                  className="no-drag rounded-lg bg-tint-blue px-3 py-1.5 text-[11px] font-medium tracking-tight text-white shadow-sm transition-colors duration-150 hover:bg-tint-blue-hover active:scale-[0.98]"
+                  className="no-drag rounded-lg bg-tint-blue px-3 py-1.5 text-[12px] font-medium tracking-tight text-white shadow-sm transition-colors duration-150 hover:bg-tint-blue-hover active:scale-[0.98]"
                 >
                   Обновить
                 </button>
@@ -293,7 +293,7 @@ export function UpdateBanner(): React.ReactElement {
               <button
                 type="button"
                 onClick={() => void handleStartUpdate()}
-                className="no-drag shrink-0 rounded-lg bg-tint-blue px-3 py-1.5 text-[11px] font-medium tracking-tight text-white shadow-sm transition-colors duration-150 hover:bg-tint-blue-hover active:scale-[0.98]"
+                className="no-drag shrink-0 rounded-lg bg-tint-blue px-3 py-1.5 text-[12px] font-medium tracking-tight text-white shadow-sm transition-colors duration-150 hover:bg-tint-blue-hover active:scale-[0.98]"
               >
                 Повторить
               </button>
@@ -304,7 +304,7 @@ export function UpdateBanner(): React.ReactElement {
                 type="button"
                 disabled={installing}
                 onClick={() => void handleInstallUpdate()}
-                className="no-drag shrink-0 rounded-lg bg-tint-blue px-3 py-1.5 text-[11px] font-medium tracking-tight text-white shadow-sm transition-colors duration-150 hover:bg-tint-blue-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                className="no-drag shrink-0 rounded-lg bg-tint-blue px-3 py-1.5 text-[12px] font-medium tracking-tight text-white shadow-sm transition-colors duration-150 hover:bg-tint-blue-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {installing ? 'Перезапуск…' : 'Перезапустить'}
               </button>
@@ -319,7 +319,7 @@ export function UpdateBanner(): React.ReactElement {
                   style={{ width: `${Math.max(0, Math.min(100, appUpdateProgress ?? 0))}%` }}
                 />
               </div>
-              <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-label-tertiary">
+              <span className="w-9 shrink-0 text-right text-[12px] tabular-nums text-label-tertiary">
                 {Math.round(appUpdateProgress ?? 0)}%
               </span>
             </div>

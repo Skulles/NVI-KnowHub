@@ -4,6 +4,7 @@ import { join } from 'path'
 import { setupUpdater, isQuittingForUpdate } from './updater'
 import { setupContentSync, getManifest, getArticleHtml } from './contentSync'
 import { setupWinbox } from './winbox'
+import { setupMonitoring } from './monitoring'
 
 /** Та же графика, что и `build/icon.png` (знак LT) — для заголовка окна и dev. */
 function getWindowIconPath(): string | undefined {
@@ -75,6 +76,7 @@ app.whenReady().then(() => {
   setupUpdater(mainWindow)
   setupContentSync(mainWindow)
   setupWinbox()
+  setupMonitoring()
 
   app.on('activate', function () {
     if (isQuittingForUpdate()) return

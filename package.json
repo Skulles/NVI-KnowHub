@@ -7,8 +7,9 @@
     "dev": "node scripts/dev.js",
     "content:pull": "node --env-file=.env scripts/content-pull.js",
     "winbox:download": "node scripts/download-winbox.js",
-    "build": "npm run content:pull && npm run winbox:download && cross-env ELECTRON_RUN_AS_NODE= CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node --env-file=.env node_modules/electron-builder/out/cli/cli.js",
-    "build:unpack": "npm run winbox:download && cross-env ELECTRON_RUN_AS_NODE= CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node --env-file=.env node_modules/electron-builder/out/cli/cli.js --dir",
+    "icons:win": "npx --yes png-to-ico build/icon.png > build/icon.ico",
+    "build": "npm run icons:win && npm run content:pull && npm run winbox:download && cross-env ELECTRON_RUN_AS_NODE= CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node --env-file=.env node_modules/electron-builder/out/cli/cli.js",
+    "build:unpack": "npm run icons:win && npm run winbox:download && cross-env ELECTRON_RUN_AS_NODE= CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node --env-file=.env node_modules/electron-builder/out/cli/cli.js --dir",
     "preview": "cross-env ELECTRON_RUN_AS_NODE= electron-vite preview",
     "typecheck": "tsc --noEmit"
   },

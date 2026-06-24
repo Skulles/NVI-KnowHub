@@ -16,6 +16,13 @@ import {
 } from '../manifest.js'
 import { titleToHtmlFile } from '../utils.js'
 
+interface PublishedSnapshot {
+  title: string
+  lead: string
+  blocks: BNBlock[]
+  htmlFile: string
+}
+
 interface DraftRecord {
   id: string
   title: string
@@ -24,6 +31,7 @@ interface DraftRecord {
   updatedAt: string
   published: boolean
   publishedAt: string | null
+  publishedSnapshot?: PublishedSnapshot
   sectionId: string
   sectionTitle: string
   sectionIcon: string
@@ -209,6 +217,22 @@ function hasUnpublishedChanges(draft: Pick<DraftRecord, 'published' | 'updatedAt
   return new Date(draft.updatedAt).getTime() > new Date(draft.publishedAt).getTime()
 }
 
+function snapshotFromDraft(draft: DraftRecord): PublishedSnapshot {
+  return {
+    title: draft.title,
+    lead: draft.lead,
+    blocks: draft.blocks,
+    htmlFile: draft.htmlFile
+  }
+}
+
+function ensurePublishedSnapshot(draftsDir: string, draft: DraftRecord): DraftRecord {
+  if (!draft.published || draft.publishedSnapshot || hasUnpublishedChanges(draft)) return draft
+  const withSnapshot = { ...draft, publishedSnapshot: snapshotFromDraft(draft) }
+  writeFileSync(join(draftsDir, `${draft.id}.json`), JSON.stringify(withSnapshot, null, 2), 'utf8')
+  return withSnapshot
+}
+
 function articleMetaFromDraft(raw: DraftRecord): Record<string, unknown> {
   return {
     id: raw.id,
@@ -342,7 +366,7 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
 
   router.get('/articles/:id', (req, res) => {
     const raw = readDraft(draftsDir, req.params.id)
-    const draft = raw ? normalizeDraftAssets(draftsDir, contentDir, raw) : null
+    const draft = raw ? ensurePublishedSnapshot(draftsDir, normalizeDraftAssets(draftsDir, contentDir, raw)) : null
     if (!draft) { res.status(404).json({ error: 'Not found' }); return }
     res.json({
       ...draft,
@@ -499,6 +523,7 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
       published: true,
       publishedAt,
       updatedAt: publishedAt,
+      publishedSnapshot: snapshotFromDraft({ ...draft, htmlFile }),
       sortOrder: sortOrder >= 0 ? sortOrder : draft.sortOrder
     }
     writeFileSync(path, JSON.stringify(updatedDraft, null, 2), 'utf8')
@@ -509,6 +534,42 @@ export function createApiRouter(draftsDir: string, contentDir: string): Router {
       published: true,
       publishedAt,
       updatedAt: publishedAt,
+      hasUnpublishedChanges: false
+    })
+  })
+
+  router.post('/articles/:id/discard-changes', (req, res) => {
+    const path = join(draftsDir, `${req.params.id}.json`)
+    if (!existsSync(path)) { res.status(404).json({ error: 'Draft not found' }); return }
+
+    const draft = ensurePublishedSnapshot(draftsDir, normalizeDraft(JSON.parse(readFileSync(path, 'utf8')) as DraftRecord))
+    if (!draft.published || !draft.publishedAt) {
+      res.status(400).json({ error: 'Статья ещё не опубликована' })
+      return
+    }
+    if (!hasUnpublishedChanges(draft)) {
+      res.status(400).json({ error: 'Нет неопубликованных изменений' })
+      return
+    }
+    if (!draft.publishedSnapshot) {
+      res.status(400).json({ error: 'Нет сохранённой опубликованной версии. Опубликуйте статью заново.' })
+      return
+    }
+
+    const snap = draft.publishedSnapshot
+    const restored: DraftRecord = {
+      ...draft,
+      title: snap.title,
+      lead: snap.lead,
+      blocks: snap.blocks,
+      htmlFile: snap.htmlFile,
+      updatedAt: draft.publishedAt
+    }
+    writeFileSync(path, JSON.stringify(restored, null, 2), 'utf8')
+
+    const response = normalizeDraftAssets(draftsDir, contentDir, restored)
+    res.json({
+      ...response,
       hasUnpublishedChanges: false
     })
   })

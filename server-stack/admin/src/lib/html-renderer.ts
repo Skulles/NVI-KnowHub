@@ -1,5 +1,6 @@
 // Converts BlockNote JSON block array to custom HTML used by KnowHub.
 import { renderCodeInlineHtml } from '@knowhub-shared/code-hint'
+import { wrapBlockNoteColorStyles, blockNoteColorAttrs, normalizeInlineContent } from '@knowhub-shared/inline-style-html'
 import { renderAlertCalloutHtml, type AlertCalloutVariant } from './callout-html'
 // BlockNote schema: https://www.blocknotejs.org/docs/editor-basics/document-structure
 
@@ -55,11 +56,12 @@ function inlineToHtml(content: BNInlineContent[]): string {
       if (s.bold) text = `<strong>${text}</strong>`
       if (s.italic) text = `<em>${text}</em>`
       if (s.underline) text = `<u>${text}</u>`
-      if (s.strikethrough) text = `<s>${text}</s>`
+      if (s.strikethrough || s.strike) text = `<s>${text}</s>`
       if (s.code) {
         const hint = typeof s.codeHint === 'string' ? s.codeHint : ''
         text = renderCodeInlineHtml(text, hint)
       }
+      text = wrapBlockNoteColorStyles(text, s)
       return text
     })
     .join('')
@@ -142,11 +144,12 @@ function getListType(type: string): ListType | null {
 }
 
 function renderBlock(block: BNBlock, usedHeadingIds?: Set<string>, headingIndex?: { value: number }): string {
-  const content = block.content as BNInlineContent[]
+  const content = normalizeInlineContent(block.content) as BNInlineContent[]
+  const colorAttrs = blockNoteColorAttrs(block.props)
 
   switch (block.type) {
     case 'paragraph':
-      return `<p>${inlineToHtml(content)}</p>`
+      return `<p${colorAttrs}>${inlineToHtml(content)}</p>`
 
     case 'heading': {
       const level = (block.props.level as number) ?? 2
@@ -157,13 +160,13 @@ function renderBlock(block: BNBlock, usedHeadingIds?: Set<string>, headingIndex?
       const id = usedHeadingIds
         ? uniqueHeadingId(plain, index, usedHeadingIds)
         : slugify(plain)
-      return `<h${level} id="${id}">${text}</h${level}>`
+      return `<h${level} id="${id}"${colorAttrs}>${text}</h${level}>`
     }
 
     case 'codeBlock': {
       const lang = escHtml((block.props.language as string) ?? '')
-      const text = escHtml(content.map((c) => (c as BNInlineContent).text ?? '').join(''))
-      return `<pre><code${lang ? ` class="language-${lang}"` : ''}>${text}</code></pre>`
+      const inner = inlineToHtml(content)
+      return `<pre${colorAttrs}><code${lang ? ` class="language-${lang}"` : ''}>${inner}</code></pre>`
     }
 
     case 'image': {

@@ -1,26 +1,65 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowDownTrayIcon, CheckIcon, ClipboardDocumentIcon, DiceIcon, RouterIcon, XMarkIcon } from '../../components/Icons'
 import { useWinboxStore } from '../../store/winbox'
 import ltapMiniLteKitImage from '../../assets/devices/mikrotik-ltap-mini-lte-kit.png'
+import groovea52AcImage from '../../assets/devices/mikrotik-groovea-52-ac.png'
+import metal52AcImage from '../../assets/devices/mikrotik-metal-52-ac.png'
+import mantboxAxImage from '../../assets/devices/mikrotik-mANTBox-ax.png'
+import wirelessWireNrayImage from '../../assets/devices/mikrotik-Wireless-Wire-nRAY.png'
+
+type ConfigDeviceFlow = 'lte-ipsec' | 'groovea'
 
 const MIKROTIK_CONFIG_DEVICES = [
   {
     id: 'ltap-mini-lte-kit',
     label: 'LtAP mini',
     image: ltapMiniLteKitImage,
+    flow: 'lte-ipsec' as const,
+    nameSlug: '',
+    disabled: false,
   },
-  // {
-  //   id: 'groovea-52',
-  //   label: 'GrooveA 52 / Metal 52 ac',
-  //   image: groovea52Image,
-  // },
-  // {
-  //   id: 'mantbox-ax-15s',
-  //   label: 'mANTBox ax 15s',
-  //   image: mantboxAx15sImage,
-  // },
+  {
+    id: 'groovea-52-ac',
+    label: 'GrooveA 52 ac',
+    image: groovea52AcImage,
+    flow: 'groovea' as const,
+    nameSlug: 'GrooveA52',
+    disabled: false,
+  },
+  {
+    id: 'metal-52-ac',
+    label: 'Metal 52 ac',
+    image: metal52AcImage,
+    flow: 'groovea' as const,
+    nameSlug: 'Metal52',
+    disabled: false,
+  },
+  {
+    id: 'mantbox-ax-15s',
+    label: 'mANTBox ax 15s',
+    image: wirelessWireNrayImage,
+    flow: 'groovea' as const,
+    nameSlug: '',
+    disabled: true,
+  },
+  {
+    id: 'wireless-wire-nray',
+    label: 'Wireless Wire nRAY',
+    image: mantboxAxImage,
+    flow: 'groovea' as const,
+    nameSlug: '',
+    disabled: true,
+  },
 ] as const
+
+function getDeviceFlow(deviceId: string): ConfigDeviceFlow {
+  return MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.flow ?? 'lte-ipsec'
+}
+
+function getDeviceNameSlug(deviceId: string): string {
+  return MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.nameSlug ?? ''
+}
 
 function preloadDeviceImages(): void {
   for (const device of MIKROTIK_CONFIG_DEVICES) {
@@ -41,6 +80,81 @@ function owlDigitsToLanAddress(digits: string): { ip: string; net: string } | nu
 
 function buildOwlDeviceName(owlDigits: string): string {
   return `OWL${owlDigits}-LTE`
+}
+
+type GrooveaRole = 'ap' | 'station1' | 'station2'
+
+const GROOVEA_ROLES: readonly GrooveaRole[] = ['ap', 'station1', 'station2']
+
+const GROOVEA_ROLE_LABELS: Record<GrooveaRole, string> = {
+  ap: 'AP',
+  station1: 'Station 1',
+  station2: 'Station 2',
+}
+
+const GROOVEA_ROLE_INDEX: Record<GrooveaRole, number> = { ap: 0, station1: 1, station2: 2 }
+
+function buildGrooveaDeviceName(owlDigits: string, role: GrooveaRole, nameSlug: string): string {
+  const suffix = role === 'ap' ? 'ap' : role === 'station1' ? 'station1' : 'station2'
+  return `owl${owlDigits}-${nameSlug}-${suffix}`
+}
+
+function buildGrooveaSsid(owlDigits: string, nameSlug: string): string {
+  return `owl${owlDigits}-${nameSlug}`
+}
+
+const GROOVEA_DEFAULT_PASSWORD = 'TaburetkaOgurec_41'
+const GROOVEA_HOST_SUFFIXES = [210, 211, 212] as const
+const GROOVEA_HOST_LABELS = ['AP', 'Station 1', 'Station 2'] as const
+
+function owlDigitsToGrooveaPrefix(digits: string): [string, string, string] | null {
+  if (!/^\d{4}$/.test(digits)) return null
+  return ['10', digits.slice(0, 2), digits.slice(2, 4)]
+}
+
+function grooveaPrefixToAddresses(prefix: [string, string, string]): {
+  ip: string
+  net: string
+  hosts: string[]
+} | null {
+  if (prefix.some((o) => o.trim() === '')) return null
+  const nums = prefix.map((o) => parseInt(o, 10))
+  if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null
+  const base = nums.join('.')
+  return {
+    ip: `${base}.${GROOVEA_HOST_SUFFIXES[0]}`,
+    net: `${base}.0`,
+    hosts: GROOVEA_HOST_SUFFIXES.map((suffix) => `${base}.${suffix}`),
+  }
+}
+
+type GrooveaWirelessProtocol = 'nv2' | '802.11'
+type GrooveaWirelessBand = '2.4 ГГц' | '5 ГГц'
+
+function grooveaBandToRouterOs(band: GrooveaWirelessBand): string {
+  return band === '2.4 ГГц' ? '2ghz-b/g/n' : '5ghz-a/n/ac'
+}
+
+function buildGrooveaConfigHeader(
+  owlDigits: string,
+  hosts: string[],
+  mikrotikPassword: string,
+  wirelessProtocol: GrooveaWirelessProtocol,
+  wirelessBand: GrooveaWirelessBand | undefined,
+  linkKey: string,
+): string {
+  const lines = [
+    `OWLGUARD ID: ${owlDigits}`,
+    `AP: ${hosts[0]}/24`,
+    `Station 1: ${hosts[1]}/24`,
+    `Station 2: ${hosts[2]}/24`,
+    `Протокол: ${wirelessProtocol}`,
+  ]
+  if (wirelessProtocol === '802.11' && wirelessBand) {
+    lines.push(`Диапазон: ${wirelessBand}`)
+  }
+  lines.push(`Пароль: ${linkKey}`, `Логин: admin`, `Пароль администратора: ${mikrotikPassword}`)
+  return lines.join('\n')
 }
 
 const WIFI_SSID_MAX_BYTES = 32
@@ -135,10 +249,10 @@ function IpOctetInput({
       className={
         plain
           ? `bg-transparent px-0 py-0 text-center font-mono text-label-primary focus:outline-none ${
-              compact ? 'w-9 text-[14px]' : 'w-10 text-[15px]'
+              compact ? 'w-9 text-[15px]' : 'w-10 text-[16px]'
             }`
           : `rounded-lg bg-surface-input/80 px-2 py-2 text-center font-mono text-label-primary transition-[background-color,box-shadow] duration-200 focus:bg-surface-input focus:outline-none focus:ring-2 focus:ring-tint-blue/40 ${
-              compact ? 'w-10 text-[13px]' : 'w-11 text-[14px]'
+              compact ? 'w-10 text-[14px]' : 'w-11 text-[15px]'
             }`
       }
     />
@@ -146,7 +260,7 @@ function IpOctetInput({
 }
 
 function FieldLabel({ children }: { children: ReactNode }) {
-  return <span className="text-[13px] font-medium text-label-secondary">{children}</span>
+  return <span className="text-[14px] font-medium text-label-secondary">{children}</span>
 }
 
 function ToggleSwitch({
@@ -195,6 +309,172 @@ function ToggleField({
   )
 }
 
+function SegmentOptionTooltip({ text, anchorEl }: { text: string; anchorEl: HTMLElement | null }) {
+  if (!anchorEl) return null
+  const rect = anchorEl.getBoundingClientRect()
+  const x = rect.left + rect.width / 2
+  const y = rect.top - 8
+  return createPortal(
+    <div
+      role="tooltip"
+      style={{ position: 'fixed', left: x, top: y, transform: 'translate(-50%, -100%)', zIndex: 9999 }}
+      className="pointer-events-none whitespace-nowrap rounded-lg border border-surface-border/80 bg-surface-raised px-2.5 py-1.5 text-[12px] leading-snug text-label-secondary shadow-sheet"
+    >
+      {text}
+      <span
+        aria-hidden
+        className="absolute -bottom-[5px] left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-b border-r border-surface-border/80 bg-surface-raised"
+      />
+    </div>,
+    document.body,
+  )
+}
+
+function SegmentOption<T extends string>({
+  option,
+  label,
+  isActive,
+  tooltip,
+  onChange,
+}: {
+  option: T
+  label?: string
+  isActive: boolean
+  tooltip?: string
+  onChange: (v: T) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [hovered, setHovered] = useState(false)
+  const displayLabel = label ?? option
+
+  return (
+    <div
+      ref={ref}
+      className="relative z-[1] flex"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-label={tooltip ? `${displayLabel} — ${tooltip}` : displayLabel}
+        aria-checked={isActive}
+        onClick={() => onChange(option)}
+        className={`flex w-full items-center justify-center whitespace-nowrap rounded-md px-3.5 font-mono text-[12.5px] font-semibold tracking-wide transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+          isActive ? 'text-white' : 'text-label-tertiary hover:text-label-secondary'
+        }`}
+      >
+        {displayLabel}
+      </button>
+      {hovered && tooltip && (
+        <SegmentOptionTooltip text={tooltip} anchorEl={ref.current} />
+      )}
+    </div>
+  )
+}
+
+function SegmentToggle<T extends string>({
+  value,
+  onChange,
+  options,
+  labels,
+  tooltips,
+  ariaLabel,
+}: {
+  value: T
+  onChange: (value: T) => void
+  options: readonly T[]
+  labels?: Partial<Record<T, string>>
+  tooltips?: Partial<Record<T, string>>
+  ariaLabel: string
+}) {
+  const activeIndex = Math.max(0, options.indexOf(value))
+
+  return (
+    <div
+      className="relative inline-grid h-9 shrink-0 rounded-lg bg-surface-input/80 p-[3px] shadow-chromeTop"
+      style={{ gridTemplateColumns: `repeat(${options.length}, 1fr)` }}
+      role="radiogroup"
+      aria-label={ariaLabel}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-[3px] rounded-md bg-tint-blue shadow-[0_1px_0_rgba(255,255,255,0.10)_inset,0_3px_10px_rgba(124,140,255,0.30)] transition-[transform,width] duration-200 ease-out"
+        style={{
+          width: `calc(${100 / options.length}% - 3px)`,
+          left: 3,
+          transform: `translateX(calc(${activeIndex * 100}% + ${activeIndex * 3}px))`,
+        }}
+      />
+      {options.map((option) => (
+        <SegmentOption
+          key={option}
+          option={option}
+          label={labels?.[option]}
+          isActive={value === option}
+          tooltip={tooltips?.[option]}
+          onChange={onChange}
+        />
+      ))}
+    </div>
+  )
+}
+
+const WIRELESS_PROTOCOL_TOOLTIPS: Partial<Record<GrooveaWirelessProtocol, string>> = {
+  'nv2': 'Протокол MikroTik - выше скорость между точками',
+  '802.11': 'Стандартный Wi-Fi - совместим с любыми устройствами',
+}
+
+const WIRELESS_BAND_TOOLTIPS: Partial<Record<GrooveaWirelessBand, string>> = {
+  '2.4 ГГц': 'Больший радиус, ниже скорость',
+  '5 ГГц': 'Меньший радиус, выше скорость',
+}
+
+function GrooveaWirelessSettings({
+  protocol,
+  band,
+  onProtocolChange,
+  onBandChange,
+}: {
+  protocol: GrooveaWirelessProtocol
+  band: GrooveaWirelessBand
+  onProtocolChange: (value: GrooveaWirelessProtocol) => void
+  onBandChange: (value: GrooveaWirelessBand) => void
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <FieldLabel>Протокол</FieldLabel>
+      <SegmentToggle
+        value={protocol}
+        onChange={onProtocolChange}
+        options={['nv2', '802.11']}
+        tooltips={WIRELESS_PROTOCOL_TOOLTIPS}
+        ariaLabel="Протокол беспроводной связи"
+      />
+
+      <div
+        className={`grid transition-[grid-template-columns] duration-200 ease-out ${
+          protocol === '802.11' ? 'grid-cols-[1fr]' : 'grid-cols-[0fr]'
+        }`}
+      >
+        <div className="min-w-0 overflow-hidden">
+          <div className="flex items-center gap-3 pl-3">
+            <span className="h-5 w-px shrink-0 rounded-full bg-surface-border" aria-hidden />
+            <FieldLabel>Диапазон</FieldLabel>
+            <SegmentToggle
+              value={band}
+              onChange={onBandChange}
+              options={['2.4 ГГц', '5 ГГц']}
+              tooltips={WIRELESS_BAND_TOOLTIPS}
+              ariaLabel="Диапазон беспроводной связи"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const fieldControlClass =
   'w-full rounded-lg bg-surface-input/80 px-3 py-2.5 text-label-primary shadow-chromeTop transition-[background-color,box-shadow] duration-200 focus:bg-surface-input focus:outline-none focus:ring-2 focus:ring-tint-blue/45'
 
@@ -206,7 +486,7 @@ function HintLink({ children, onClick }: { children: ReactNode; onClick: () => v
     <button
       type="button"
       onClick={onClick}
-      className="self-start rounded-md px-1 py-0.5 text-[12px] text-tint-blue transition-colors hover:text-tint-blue-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+      className="self-start rounded-md px-1 py-0.5 text-[13px] text-tint-blue transition-colors hover:text-tint-blue-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
     >
       {children}
     </button>
@@ -216,7 +496,7 @@ function HintLink({ children, onClick }: { children: ReactNode; onClick: () => v
 function FormAlert({ tone, children }: { tone: 'warning' | 'muted'; children: ReactNode }) {
   return (
     <p
-      className={`m-0 text-[12px] leading-relaxed ${
+      className={`m-0 text-[13px] leading-relaxed ${
         tone === 'warning' ? 'text-amber-400' : 'text-label-tertiary'
       }`}
     >
@@ -246,7 +526,7 @@ function BtnSecondary({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center justify-center rounded-xl border border-surface-border bg-surface-raised/20 px-4 py-2.5 text-[13px] font-medium text-label-secondary transition-colors duration-200 hover:border-surface-border hover:bg-white/[0.04] hover:text-label-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${className}`}
+      className={`inline-flex items-center justify-center rounded-xl border border-surface-border bg-surface-raised/20 px-4 py-2.5 text-[14px] font-medium text-label-secondary transition-colors duration-200 hover:border-surface-border hover:bg-white/[0.04] hover:text-label-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${className}`}
     >
       {children}
     </button>
@@ -269,7 +549,7 @@ function BtnPrimary({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex items-center justify-center rounded-xl bg-tint-blue px-4 py-2.5 text-[13px] font-semibold tracking-tight text-white shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_8px_20px_rgba(124,140,255,0.22)] transition-[background-color,transform,opacity] duration-200 hover:bg-tint-blue-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card ${className}`}
+      className={`inline-flex items-center justify-center rounded-xl bg-tint-blue px-4 py-2.5 text-[14px] font-semibold tracking-tight text-white shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_8px_20px_rgba(124,140,255,0.22)] transition-[background-color,transform,opacity] duration-200 hover:bg-tint-blue-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card ${className}`}
     >
       {children}
     </button>
@@ -310,28 +590,30 @@ function buildLanPrefix(
 function buildConfigHeader(
   owlDigits: string,
   lanAddress: { ip: string; net: string },
-  wifi?: { ssid: string; password: string; hidden: boolean },
+  mikrotikPassword: string,
+  wifi?: { ssid: string; password: string },
 ): string {
   const lines = [
     `OWLGUARD ID: ${owlDigits}`,
-    `Сеть: ${lanAddress.net}/24`,
     `IP адрес Mikrotik роутера: ${lanAddress.ip}/24`,
+    `Логин: admin`,
+    `Пароль: ${mikrotikPassword}`,
   ]
   if (wifi) {
-    lines.push(
-      `WiFi SSID: ${wifi.ssid}`,
-      `WiFi пароль: ${wifi.password}`,
-      `Скрытая сеть: ${wifi.hidden ? 'да' : 'нет'}`,
-    )
+    lines.push(`WiFi SSID: ${wifi.ssid}`, `WiFi пароль: ${wifi.password}`)
   }
   return lines.join('\n')
 }
 
-function buildConfigDownloadContent(header: string, commands: string): string {
-  return `${header}\n\n${'='.repeat(40)}\n\n${commands}`
+const CONFIG_FOOTER_NOTE = 'DHCP отключён. Маску и шлюз на клиентах укажите вручную.'
+
+function buildConfigDownloadContent(header: string, commands: string, footer?: string): string {
+  const body = `${header}\n\n${'='.repeat(40)}\n\n${commands}\n\n${'='.repeat(40)}`
+  if (!footer) return body
+  return `${body}\n\n${footer}`
 }
 
-const MANAGEMENT_NETWORKS = ['192.168.3.0/24', '172.33.11.0/24', '10.33.12.0/24'] as const
+const MANAGEMENT_NETWORKS = ['10.33.12.0/24'] as const
 
 function managementAddresses(lanNet: string): string {
   return `${lanNet}/24,${MANAGEMENT_NETWORKS.join(',')}`
@@ -488,12 +770,6 @@ function buildCleanupBlock(scriptCommands: string[] = []): string[] {
     `/tool mac-server set allowed-interface-list=all`,
     `/tool mac-server mac-winbox set allowed-interface-list=all`,
     `/ip neighbor discovery-settings set discover-interface-list=all`,
-    `/ipv6 settings set disable-ipv6=no`,
-    `/ip service set telnet disabled=no`,
-    `/ip service set ftp disabled=no`,
-    `/ip service set www disabled=no`,
-    `/ip service set api disabled=no`,
-    `/ip service set api-ssl disabled=no`,
     `/ip service set winbox address=""`,
     `/ip service set ssh address=""`,
   ]
@@ -581,7 +857,6 @@ function buildPreviewConfig(options: {
   wifiPassword: string
   wifiHidden: boolean
   primaryScript: string
-  isManualSetup: boolean
   newPassword: string
   deviceName: string
 }): string {
@@ -592,15 +867,14 @@ function buildPreviewConfig(options: {
     wifiPassword,
     wifiHidden,
     primaryScript,
-    isManualSetup,
     newPassword,
     deviceName,
   } = options
 
-  const base = isManualSetup ? '' : primaryScript.trim()
-  if (!isManualSetup && !base) return ''
+  const base = primaryScript.trim()
+  if (!base) return ''
 
-  const scriptCommands = base ? splitScriptToCommands(base) : []
+  const scriptCommands = splitScriptToCommands(base)
   const { vpnCommands, inputFirewallRules } = partitionVpnScript(scriptCommands)
 
   const sections = [
@@ -608,16 +882,118 @@ function buildPreviewConfig(options: {
     buildLanPrefix(lanAddress, wifiEnabled, wifiSsid, wifiPassword, wifiHidden).join('\n'),
     `/ip firewall nat add chain=srcnat out-interface=lte1 action=masquerade`,
     vpnCommands.length > 0 ? vpnCommands.join('\n') : '',
-    buildHardeningBlock(lanAddress, wifiEnabled, inputFirewallRules, !isManualSetup).join('\n'),
+    buildHardeningBlock(lanAddress, wifiEnabled, inputFirewallRules, true).join('\n'),
     [
       deviceName.trim() ? `/system identity set name="${deviceName.trim()}"` : '',
       newPassword ? `/user set admin password=${newPassword}` : '',
+      newPassword ? buildPassThroughCommand() : '',
     ]
       .filter(Boolean)
       .join('\n'),
   ]
 
   return sections.filter(Boolean).join('\n\n')
+}
+
+function buildGrooveaLanBlock(options: {
+  role: GrooveaRole
+  hosts: string[]
+  net: string
+  protocol: GrooveaWirelessProtocol
+  band: GrooveaWirelessBand
+  ssid: string
+  linkKey: string
+}): string[] {
+  const { role, hosts, net, protocol, band, ssid, linkKey } = options
+  const roleIndex = GROOVEA_ROLE_INDEX[role]
+  const ipAddr = hosts[roleIndex]
+  const mode = role === 'ap' ? 'ap-bridge' : 'station'
+  const escapedSsid = escapeRouterOsString(ssid)
+  const escapedKey = escapeRouterOsString(linkKey)
+
+  const lines: string[] = [
+    `/interface bridge add name=bridge-lan`,
+    `/interface bridge port add bridge=bridge-lan interface=ether1`,
+    `/interface bridge port add bridge=bridge-lan interface=wlan1`,
+  ]
+
+  if (protocol === 'nv2') {
+    lines.push(
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=${mode} wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8`,
+    )
+  } else {
+    lines.push(
+      `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=${mode} wireless-protocol=802.11 band=${grooveaBandToRouterOs(band)} ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8`,
+    )
+  }
+
+  lines.push(`/ip address add address=${ipAddr}/24 network=${net} interface=bridge-lan`)
+  return lines
+}
+
+function buildGrooveaDeviceConfig(options: {
+  role: GrooveaRole
+  owlDigits: string
+  nameSlug: string
+  ssid: string
+  hosts: string[]
+  net: string
+  newPassword: string
+  protocol: GrooveaWirelessProtocol
+  band: GrooveaWirelessBand
+  linkKey: string
+}): string {
+  const { role, owlDigits, nameSlug, ssid, hosts, net, newPassword, protocol, band, linkKey } = options
+  const roleIndex = GROOVEA_ROLE_INDEX[role]
+  const lanAddress = { ip: hosts[roleIndex], net }
+  const deviceName = buildGrooveaDeviceName(owlDigits, role, nameSlug)
+
+  const sections = [
+    buildGrooveaLanBlock({ role, hosts, net, protocol, band, ssid, linkKey }).join('\n'),
+    [
+      deviceName.trim() ? `/system identity set name="${deviceName.trim()}"` : '',
+      newPassword ? `/user set admin password=${newPassword}` : '',
+      newPassword ? buildPassThroughCommand() : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  ]
+
+  return sections.filter(Boolean).join('\n\n')
+}
+
+function buildGrooveaAllConfigs(options: {
+  owlDigits: string
+  nameSlug: string
+  ssid: string
+  hosts: string[]
+  net: string
+  newPassword: string
+  protocol: GrooveaWirelessProtocol
+  band: GrooveaWirelessBand
+  linkKey: string
+}): Record<GrooveaRole, string> {
+  return Object.fromEntries(
+    GROOVEA_ROLES.map((role) => [role, buildGrooveaDeviceConfig({ role, ...options })]),
+  ) as Record<GrooveaRole, string>
+}
+
+function buildGrooveaSaveTxt(
+  header: string,
+  configs: Record<GrooveaRole, string>,
+  deviceNames: Record<GrooveaRole, string>,
+): string {
+  const sep = '='.repeat(48)
+  const blocks = GROOVEA_ROLES.map(
+    (role) =>
+      `=== ${GROOVEA_ROLE_LABELS[role]}: ${deviceNames[role]} ===\n\n${configs[role]}`,
+  )
+  return [header, sep, ...blocks].join('\n\n')
+}
+
+function buildPassThroughCommand(): string {
+  return `/log info message="done"`
 }
 
 function MikrotikConfigGenerator() {
@@ -627,20 +1003,47 @@ function MikrotikConfigGenerator() {
   const [newPassword, setNewPassword] = useState('')
   const [owlDigits, setOwlDigits] = useState('')
   const [ipOctets, setIpOctets] = useState<[string, string, string, string]>(['10', '0', '0', '1'])
+  const [grooveaPrefixOctets, setGrooveaPrefixOctets] = useState<[string, string, string]>(['10', '0', '0'])
+  const [grooveaWirelessProtocol, setGrooveaWirelessProtocol] = useState<GrooveaWirelessProtocol>('nv2')
+  const [grooveaWirelessBand, setGrooveaWirelessBand] = useState<GrooveaWirelessBand>('5 ГГц')
+  const [linkKey, setLinkKey] = useState('')
+  const [grooveaSsid, setGrooveaSsid] = useState('')
+  const [grooveaSsidEdited, setGrooveaSsidEdited] = useState(false)
+  const [previewRole, setPreviewRole] = useState<GrooveaRole>('ap')
   const [wifiEnabled, setWifiEnabled] = useState(false)
   const [wifiSsid, setWifiSsid] = useState('')
   const [wifiSsidEdited, setWifiSsidEdited] = useState(false)
   const [wifiPassword, setWifiPassword] = useState('')
   const [wifiHidden, setWifiHidden] = useState(false)
   const [step, setStep] = useState<'input' | 'settings' | 'preview'>('input')
-  const [isManualSetup, setIsManualSetup] = useState(false)
   const [copied, setCopied] = useState(false)
   const ipInputRefs = useMemo(() => Array.from({ length: 4 }, () => ({ current: null as HTMLInputElement | null })), [])
+  const grooveaIpInputRefs = useMemo(
+    () =>
+      GROOVEA_HOST_LABELS.map(() =>
+        Array.from({ length: 3 }, () => ({ current: null as HTMLInputElement | null })),
+      ),
+    [],
+  )
 
   const suggestedFromScript = useMemo(() => parseOwlKeyFromScript(primaryScript), [primaryScript])
+  const deviceFlow = getDeviceFlow(deviceId)
+  const deviceNameSlug = getDeviceNameSlug(deviceId)
+  const isGroovea = deviceFlow === 'groovea'
   const deviceName = /^\d{4}$/.test(owlDigits) ? buildOwlDeviceName(owlDigits) : ''
   const lanAddressFromOwl = useMemo(() => owlDigitsToLanAddress(owlDigits), [owlDigits])
-  const lanAddress = useMemo(() => octetsToLanAddress(ipOctets), [ipOctets])
+  const grooveaAddresses = useMemo(
+    () => grooveaPrefixToAddresses(grooveaPrefixOctets),
+    [grooveaPrefixOctets],
+  )
+  const lanAddress = useMemo(() => {
+    if (isGroovea) {
+      if (!grooveaAddresses) return null
+      return { ip: grooveaAddresses.ip, net: grooveaAddresses.net }
+    }
+    return octetsToLanAddress(ipOctets)
+  }, [isGroovea, grooveaAddresses, ipOctets])
+  const grooveaPrefixFromOwl = useMemo(() => owlDigitsToGrooveaPrefix(owlDigits), [owlDigits])
 
   const applyOwlDigits = useCallback((digits: string) => {
     setOwlDigits(digits)
@@ -649,21 +1052,53 @@ function MikrotikConfigGenerator() {
       const octets = ipToOctets(derived.ip)
       if (octets) setIpOctets(octets)
     }
+    const grooveaPrefix = owlDigitsToGrooveaPrefix(digits)
+    if (grooveaPrefix) setGrooveaPrefixOctets(grooveaPrefix)
     if (wifiEnabled && !wifiSsidEdited && /^\d{4}$/.test(digits)) {
       setWifiSsid(`owl${digits}`)
     }
-  }, [wifiEnabled, wifiSsidEdited])
+    if (!grooveaSsidEdited && /^\d{4}$/.test(digits)) {
+      setGrooveaSsid(buildGrooveaSsid(digits, deviceNameSlug))
+    }
+  }, [wifiEnabled, wifiSsidEdited, grooveaSsidEdited, deviceNameSlug])
 
   const configHeaderText = useMemo(() => {
-    if (!lanAddress || !/^\d{4}$/.test(owlDigits)) return ''
+    if (!/^\d{4}$/.test(owlDigits) || !newPassword.trim()) return ''
+    if (isGroovea) {
+      if (!grooveaAddresses || !linkKey.trim()) return ''
+      return buildGrooveaConfigHeader(
+        owlDigits,
+        grooveaAddresses.hosts,
+        newPassword.trim(),
+        grooveaWirelessProtocol,
+        grooveaWirelessProtocol === '802.11' ? grooveaWirelessBand : undefined,
+        linkKey.trim(),
+      )
+    }
+    if (!lanAddress) return ''
     const wifi =
       wifiEnabled && wifiSsid.trim() && wifiPassword.trim()
-        ? { ssid: wifiSsid.trim(), password: wifiPassword.trim(), hidden: wifiHidden }
+        ? { ssid: wifiSsid.trim(), password: wifiPassword.trim() }
         : undefined
-    return buildConfigHeader(owlDigits, lanAddress, wifi)
-  }, [owlDigits, lanAddress, wifiEnabled, wifiSsid, wifiPassword, wifiHidden])
+    return buildConfigHeader(owlDigits, lanAddress, newPassword.trim(), wifi)
+  }, [owlDigits, lanAddress, newPassword, wifiEnabled, wifiSsid, wifiPassword, isGroovea, grooveaAddresses, grooveaWirelessProtocol, grooveaWirelessBand, linkKey])
 
   const previewText = useMemo(() => {
+    if (isGroovea) {
+      if (!grooveaAddresses || !/^\d{4}$/.test(owlDigits)) return ''
+      return buildGrooveaDeviceConfig({
+        role: previewRole,
+        owlDigits,
+        nameSlug: deviceNameSlug,
+        ssid: grooveaSsid,
+        hosts: grooveaAddresses.hosts,
+        net: grooveaAddresses.net,
+        newPassword,
+        protocol: grooveaWirelessProtocol,
+        band: grooveaWirelessBand,
+        linkKey,
+      })
+    }
     if (!lanAddress) return ''
     return buildPreviewConfig({
       lanAddress,
@@ -672,18 +1107,17 @@ function MikrotikConfigGenerator() {
       wifiPassword,
       wifiHidden,
       primaryScript,
-      isManualSetup,
       newPassword,
       deviceName,
     })
-  }, [primaryScript, lanAddress, newPassword, deviceName, isManualSetup, wifiEnabled, wifiSsid, wifiPassword, wifiHidden])
+  }, [primaryScript, lanAddress, newPassword, deviceName, wifiEnabled, wifiSsid, wifiPassword, wifiHidden, isGroovea, grooveaWirelessProtocol, grooveaWirelessBand, grooveaAddresses, owlDigits, previewRole, linkKey, grooveaSsid, deviceNameSlug])
 
-  const isValidIp = lanAddress !== null
+  const isValidIp = isGroovea ? grooveaAddresses !== null : lanAddress !== null
   const canConfirmSettings =
     isValidIp &&
     newPassword.trim().length > 0 &&
     /^\d{4}$/.test(owlDigits) &&
-    (!wifiEnabled || (isValidWifiSsid(wifiSsid) && wifiPassword.trim().length > 0))
+    (isGroovea ? linkKey.trim().length > 0 : !wifiEnabled || (isValidWifiSsid(wifiSsid) && wifiPassword.trim().length > 0))
 
   const isValidConfig = useMemo(() => {
     const lines = primaryScript.split('\n').filter((l) => l.trim())
@@ -742,8 +1176,38 @@ function MikrotikConfigGenerator() {
   }, [previewText])
 
   const handleSave = useCallback(() => {
+    if (isGroovea) {
+      if (!configHeaderText || !grooveaAddresses || !/^\d{4}$/.test(owlDigits) || !linkKey.trim()) return
+      const configs = buildGrooveaAllConfigs({
+        owlDigits,
+        nameSlug: deviceNameSlug,
+        ssid: grooveaSsid,
+        hosts: grooveaAddresses.hosts,
+        net: grooveaAddresses.net,
+        newPassword,
+        protocol: grooveaWirelessProtocol,
+        band: grooveaWirelessBand,
+        linkKey,
+      })
+      const deviceNames = Object.fromEntries(
+        GROOVEA_ROLES.map((role) => [role, buildGrooveaDeviceName(owlDigits, role, deviceNameSlug)]),
+      ) as Record<GrooveaRole, string>
+      const content = buildGrooveaSaveTxt(configHeaderText, configs, deviceNames)
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `owl${owlDigits}-${deviceNameSlug}-config.txt`
+      link.click()
+      URL.revokeObjectURL(url)
+      return
+    }
     if (!previewText || !configHeaderText || !lanAddress || !/^\d{4}$/.test(owlDigits)) return
-    const content = buildConfigDownloadContent(configHeaderText, previewText)
+    const content = buildConfigDownloadContent(
+      configHeaderText,
+      previewText,
+      CONFIG_FOOTER_NOTE,
+    )
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -751,52 +1215,50 @@ function MikrotikConfigGenerator() {
     link.download = `${buildOwlDeviceName(owlDigits)}-config.txt`
     link.click()
     URL.revokeObjectURL(url)
-  }, [previewText, configHeaderText, lanAddress, owlDigits])
+  }, [previewText, configHeaderText, lanAddress, owlDigits, isGroovea, grooveaAddresses, newPassword, grooveaWirelessProtocol, grooveaWirelessBand, linkKey, grooveaSsid, deviceNameSlug])
 
   const deviceLabel =
     MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.label ?? deviceId
 
-  const resetGeneratorState = useCallback(() => {
+  const resetGeneratorState = useCallback((initialStep: 'input' | 'settings' = 'input') => {
     setPrimaryScript('')
     setNewPassword('')
     setOwlDigits('')
     setIpOctets(['10', '0', '0', '1'])
-    setIsManualSetup(false)
+    setGrooveaPrefixOctets(['10', '0', '0'])
+    setGrooveaWirelessProtocol('nv2')
+    setGrooveaWirelessBand('5 ГГц')
+    setLinkKey('')
+    setGrooveaSsid('')
+    setGrooveaSsidEdited(false)
+    setPreviewRole('ap')
     setWifiEnabled(false)
     setWifiSsid('')
     setWifiSsidEdited(false)
     setWifiPassword('')
     setWifiHidden(false)
-    setStep('input')
+    setStep(initialStep)
     setCopied(false)
   }, [])
 
   const openForDevice = useCallback((id: string) => {
+    const flow = getDeviceFlow(id)
     setDeviceId(id)
-    resetGeneratorState()
+    resetGeneratorState(flow === 'groovea' ? 'settings' : 'input')
+    if (flow === 'groovea') {
+      setNewPassword(GROOVEA_DEFAULT_PASSWORD)
+      setLinkKey(generatePassword())
+    }
     setModalOpen(true)
-  }, [resetGeneratorState])
+  }, [resetGeneratorState, generatePassword])
 
   const goToSettingsStep = useCallback(() => {
-    setIsManualSetup(false)
     if (suggestedFromScript) {
       applyOwlDigits(suggestedFromScript.owlDigits)
     }
     generateAdminPassword()
     setStep('settings')
   }, [suggestedFromScript, generateAdminPassword, applyOwlDigits])
-
-  const goToManualSettingsStep = useCallback(() => {
-    setIsManualSetup(true)
-    if (suggestedFromScript) {
-      applyOwlDigits(suggestedFromScript.owlDigits)
-    } else {
-      setOwlDigits('')
-      setIpOctets(['10', '0', '0', '1'])
-    }
-    if (!newPassword.trim()) generateAdminPassword()
-    setStep('settings')
-  }, [suggestedFromScript, newPassword, generateAdminPassword, applyOwlDigits])
 
   const closeModal = useCallback(() => {
     setModalOpen(false)
@@ -824,7 +1286,7 @@ function MikrotikConfigGenerator() {
   const modal = modalOpen
     ? createPortal(
         <div
-          className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6"
+          className="tool-view fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6"
           role="presentation"
         >
           <div
@@ -852,12 +1314,12 @@ function MikrotikConfigGenerator() {
                 draggable={false}
               />
               <div className="relative min-w-0 flex-1">
-                <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-label-tertiary">
+                <p className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-label-tertiary">
                   MikroTik
                 </p>
                 <h3
                   id="mikrotik-config-modal-title"
-                  className="m-0 mt-0.5 text-[16px] font-semibold leading-snug tracking-tight text-label-primary"
+                  className="m-0 mt-0.5 text-[17px] font-semibold leading-snug tracking-tight text-label-primary"
                 >
                   {deviceLabel}
                 </h3>
@@ -873,12 +1335,12 @@ function MikrotikConfigGenerator() {
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-              {step === 'input' ? (
+              {step === 'input' && !isGroovea ? (
                 <div className="flex flex-col gap-4">
                   <label className="flex flex-col gap-2">
                     
-                    <span className="text-[12px] leading-relaxed text-label-tertiary">
-                    Вставьте команды от для IPsec, полученные от техподдержки. На их основе будет собран полный конфиг.
+                    <span className="text-[13px] leading-relaxed text-label-tertiary">
+                    Вставьте команды для IPsec, полученные от техподдержки. На их основе будет собран полный конфиг.
                     </span>
                     <textarea
                       value={primaryScript}
@@ -886,7 +1348,7 @@ function MikrotikConfigGenerator() {
                       rows={10}
                       spellCheck={false}
                       placeholder={'/ip ipsec profile add dh-group="..." ...\n/ip ipsec peer add ...\n/ip ipsec identity add my-id=key-id:...'}
-                      className={`${fieldControlClass} min-h-[10rem] resize-none font-mono text-[12.5px] leading-[1.65] placeholder:text-label-tertiary/40`}
+                      className={`${fieldControlClass} min-h-[10rem] resize-none font-mono text-[13.5px] leading-[1.65] placeholder:text-label-tertiary/40`}
                     />
                   </label>
 
@@ -894,7 +1356,7 @@ function MikrotikConfigGenerator() {
                     <div className="space-y-2">
                       {primaryScript.trim() && !isValidConfig && (
                         <FormAlert tone="warning">
-                          Убедитесь, что все команды введены верно — каждая должна начинаться с{' '}
+                          Убедитесь, что все команды введены верно, каждая должна начинаться с{' '}
                           <code className="font-mono text-amber-200/90">/ip</code>
                         </FormAlert>
                       )}
@@ -909,22 +1371,19 @@ function MikrotikConfigGenerator() {
 
                   <ModalFooter>
                     <div />
-                    <div className="flex items-center gap-2">
-                      <BtnSecondary onClick={goToManualSettingsStep}>Ручная настройка (без VPN)</BtnSecondary>
-                      <BtnPrimary disabled={!isValidConfig || !hasIdentityLine} onClick={goToSettingsStep}>
-                        Далее
-                      </BtnPrimary>
-                    </div>
+                    <BtnPrimary disabled={!isValidConfig || !hasIdentityLine} onClick={goToSettingsStep}>
+                      Далее
+                    </BtnPrimary>
                   </ModalFooter>
                 </div>
               ) : step === 'settings' ? (
                 <div className="flex flex-col gap-5">
                   <div className="flex flex-col gap-2">
-                    <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+                    <div className={`flex flex-wrap gap-x-4 gap-y-3 ${isGroovea ? 'items-start' : 'items-end'}`}>
                       <div className="flex w-fit flex-col gap-2">
                         <FieldLabel>OWLGUARD ID</FieldLabel>
                         <div className={`${fieldControlFitClass} flex h-[42px] items-center gap-2 px-2 py-0 focus-within:ring-2 focus-within:ring-tint-blue/45`}>
-                          <span className="shrink-0 font-mono text-[13px] font-semibold text-tint-blue select-none">owl</span>
+                          <span className="shrink-0 font-mono text-[14px] font-semibold text-tint-blue select-none">owl</span>
                           <input
                             type="text"
                             inputMode="numeric"
@@ -934,45 +1393,89 @@ function MikrotikConfigGenerator() {
                             value={owlDigits}
                             onChange={(e) => applyOwlDigits(e.target.value.replace(/\D/g, '').slice(0, 4))}
                             placeholder="0000"
-                            className="w-[3.25rem] shrink-0 bg-transparent py-0 font-mono text-[15px] tracking-[0.12em] text-label-primary placeholder:text-label-tertiary/40 focus:outline-none"
+                            className="w-[3.5rem] shrink-0 bg-transparent py-0 font-mono text-[16px] tracking-[0.12em] text-label-primary placeholder:text-label-tertiary/40 focus:outline-none"
                           />
                         </div>
                       </div>
 
-                      <div className="ml-6 flex w-fit flex-col gap-2">
-                        <FieldLabel>IP-адрес в локальной сети</FieldLabel>
-                        <div className={`${fieldControlFitClass} flex h-[42px] items-center gap-1 px-3 py-0 font-mono focus-within:ring-2 focus-within:ring-tint-blue/45`}>
-                          {ipOctets.map((octet, i) => (
-                            <span key={i} className="flex items-center gap-1">
-                              <IpOctetInput
-                                plain
-                                compact
-                                value={octet}
-                                inputRef={(el) => { ipInputRefs[i].current = el }}
-                                onChange={(v) => {
-                                  setIpOctets((prev) => {
-                                    const next = [...prev] as [string, string, string, string]
-                                    next[i] = v
-                                    return next
-                                  })
-                                }}
-                                onComplete={() => {
-                                  if (i < 3) ipInputRefs[i + 1].current?.focus()
-                                }}
-                              />
-                              {i < 3 && <span className="text-[14px] text-label-tertiary/70">.</span>}
-                            </span>
-                          ))}
-                          <span className="ml-1 text-[12px] text-label-tertiary">/24</span>
+                      {isGroovea ? (
+                        <div className="ml-6 flex w-fit flex-col gap-2">
+                          <div className="flex flex-col gap-2">
+                            {GROOVEA_HOST_LABELS.map((label, rowIndex) => (
+                              <div key={label} className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                                <span className="flex h-[42px] w-[6.5rem] shrink-0 items-center justify-center text-center text-[14px] font-medium text-label-secondary">
+                                  {label}
+                                </span>
+                                <div className={`${fieldControlFitClass} flex h-[42px] items-center gap-1 px-3 py-0 font-mono focus-within:ring-2 focus-within:ring-tint-blue/45`}>
+                                  {grooveaPrefixOctets.map((octet, i) => (
+                                    <span key={i} className="flex items-center gap-1">
+                                      <IpOctetInput
+                                        plain
+                                        compact
+                                        value={octet}
+                                        inputRef={(el) => {
+                                          grooveaIpInputRefs[rowIndex][i].current = el
+                                        }}
+                                        onChange={(v) => {
+                                          setGrooveaPrefixOctets((prev) => {
+                                            const next = [...prev] as [string, string, string]
+                                            next[i] = v
+                                            return next
+                                          })
+                                        }}
+                                        onComplete={() => {
+                                          if (i < 2) grooveaIpInputRefs[rowIndex][i + 1].current?.focus()
+                                        }}
+                                      />
+                                      {i < 2 && <span className="text-[15px] text-label-tertiary/70">.</span>}
+                                    </span>
+                                  ))}
+                                  <span className="text-[15px] text-label-tertiary/70">.</span>
+                                  <span className="min-w-[2rem] text-center text-[15px] text-label-primary">
+                                    {GROOVEA_HOST_SUFFIXES[rowIndex]}
+                                  </span>
+                                  <span className="ml-1 text-[13px] text-label-tertiary">/24</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="ml-6 flex w-fit flex-col gap-2">
+                          <FieldLabel>IP-адрес в локальной сети</FieldLabel>
+                          <div className={`${fieldControlFitClass} flex h-[42px] items-center gap-1 px-3 py-0 font-mono focus-within:ring-2 focus-within:ring-tint-blue/45`}>
+                            {ipOctets.map((octet, i) => (
+                              <span key={i} className="flex items-center gap-1">
+                                <IpOctetInput
+                                  plain
+                                  compact
+                                  value={octet}
+                                  inputRef={(el) => { ipInputRefs[i].current = el }}
+                                  onChange={(v) => {
+                                    setIpOctets((prev) => {
+                                      const next = [...prev] as [string, string, string, string]
+                                      next[i] = v
+                                      return next
+                                    })
+                                  }}
+                                  onComplete={() => {
+                                    if (i < 3) ipInputRefs[i + 1].current?.focus()
+                                  }}
+                                />
+                                {i < 3 && <span className="text-[15px] text-label-tertiary/70">.</span>}
+                              </span>
+                            ))}
+                            <span className="ml-1 text-[13px] text-label-tertiary">/24</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {suggestedFromScript && owlDigits !== suggestedFromScript.owlDigits && (
+                    {!isGroovea && suggestedFromScript && owlDigits !== suggestedFromScript.owlDigits && (
                       <HintLink onClick={() => applyOwlDigits(suggestedFromScript.owlDigits)}>
                         Подставить из конфига: owl{suggestedFromScript.owlDigits}
                       </HintLink>
                     )}
-                    {lanAddressFromOwl && lanAddress?.ip !== lanAddressFromOwl.ip && (
+                    {!isGroovea && lanAddressFromOwl && lanAddress?.ip !== lanAddressFromOwl.ip && (
                       <HintLink
                         onClick={() => {
                           const octets = ipToOctets(lanAddressFromOwl.ip)
@@ -982,7 +1485,17 @@ function MikrotikConfigGenerator() {
                         Подставить из имени: {lanAddressFromOwl.ip}
                       </HintLink>
                     )}
-                    {ipOctets.some((o) => o.trim() !== '') && !isValidIp && (
+                    {isGroovea && grooveaPrefixFromOwl && grooveaPrefixOctets.join('.') !== grooveaPrefixFromOwl.join('.') && (
+                      <HintLink onClick={() => setGrooveaPrefixOctets(grooveaPrefixFromOwl)}>
+                        Подставить из имени: {grooveaPrefixFromOwl.join('.')}.210
+                      </HintLink>
+                    )}
+                    {!isGroovea && ipOctets.some((o) => o.trim() !== '') && !isValidIp && (
+                      <FormAlert tone="warning">
+                        Введите корректный IP-адрес (каждый октет от 0 до 255)
+                      </FormAlert>
+                    )}
+                    {isGroovea && grooveaPrefixOctets.some((o) => o.trim() !== '') && !isValidIp && (
                       <FormAlert tone="warning">
                         Введите корректный IP-адрес (каждый октет от 0 до 255)
                       </FormAlert>
@@ -998,7 +1511,7 @@ function MikrotikConfigGenerator() {
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         placeholder="Сгенерируйте или введите пароль"
-                        className={`${fieldControlClass} min-w-0 flex-1 text-[14px] placeholder:text-label-tertiary/40`}
+                        className={`${fieldControlClass} min-w-0 flex-1 text-[15px] placeholder:text-label-tertiary/40`}
                       />
                       <button
                         type="button"
@@ -1012,69 +1525,131 @@ function MikrotikConfigGenerator() {
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-3">
-                    <ToggleField label="Включить WiFi" checked={wifiEnabled} onChange={toggleWifi} />
+                  {isGroovea && (
+                    <div className="grid grid-cols-1 items-end gap-x-3 gap-y-2 sm:grid-cols-2">
+                      <div className="flex min-w-0 flex-col gap-2">
+                        <FieldLabel>Имя сети (SSID)</FieldLabel>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          value={grooveaSsid}
+                          onChange={(e) => {
+                            setGrooveaSsidEdited(true)
+                            setGrooveaSsid(e.target.value)
+                          }}
+                          onBlur={() => setGrooveaSsid((s) => s.trim())}
+                          placeholder="owl0000-GrooveA52"
+                          className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                        />
+                      </div>
 
-                    <div
-                      className={`grid transition-[grid-template-rows] duration-300 ease-spring ${
-                        wifiEnabled ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                      }`}
-                    >
-                      <div className="min-h-0 overflow-hidden" aria-hidden={!wifiEnabled}>
-                        <div className="flex flex-col gap-3 p-1">
-                          <div className="grid grid-cols-1 items-end gap-x-3 gap-y-2 sm:grid-cols-2">
-                            <div className="flex min-w-0 flex-col gap-2">
-                              <FieldLabel>Имя сети (SSID)</FieldLabel>
-                              <input
-                                type="text"
-                                autoComplete="off"
-                                value={wifiSsid}
-                                onChange={(e) => {
-                                  setWifiSsidEdited(true)
-                                  setWifiSsid(sanitizeWifiSsidInput(e.target.value))
-                                }}
-                                onBlur={() => setWifiSsid((ssid) => ssid.trim())}
-                                placeholder="owl0000"
-                                className={`${fieldControlClass} h-[42px] py-0 text-[14px] placeholder:text-label-tertiary/40`}
-                              />
-                            </div>
-
-                            <div className="flex min-w-0 flex-col gap-2">
-                              <FieldLabel>Пароль WiFi</FieldLabel>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="text"
-                                  autoComplete="new-password"
-                                  value={wifiPassword}
-                                  onChange={(e) => setWifiPassword(e.target.value)}
-                                  placeholder="Пароль для подключения"
-                                  className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[14px] placeholder:text-label-tertiary/40`}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={generateWifiPassword}
-                                  title="Сгенерировать пароль"
-                                  className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
-                                  aria-label="Сгенерировать пароль WiFi"
-                                >
-                                  <DiceIcon className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          <ToggleField
-                            label="Скрытая сеть"
-                            checked={wifiHidden}
-                            onChange={() => setWifiHidden((v) => !v)}
+                      <div className="flex min-w-0 flex-col gap-2">
+                        <FieldLabel>Пароль</FieldLabel>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            autoComplete="off"
+                            value={linkKey}
+                            onChange={(e) => setLinkKey(e.target.value)}
+                            placeholder="Одинаковый на AP и станциях"
+                            className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40`}
                           />
+                          <button
+                            type="button"
+                            onClick={() => setLinkKey(generatePassword())}
+                            title="Сгенерировать пароль"
+                            className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                            aria-label="Сгенерировать пароль"
+                          >
+                            <DiceIcon className="h-4 w-4" />
+                          </button>
                         </div>
                       </div>
                     </div>
-                  </div>
+                  )}
+
+                  {!isGroovea ? (
+                    <div className="flex flex-col gap-3">
+                      <ToggleField label="Включить WiFi" checked={wifiEnabled} onChange={toggleWifi} />
+
+                      <div
+                        className={`grid transition-[grid-template-rows] duration-300 ease-spring ${
+                          wifiEnabled ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                        }`}
+                      >
+                        <div className="min-h-0 overflow-hidden" aria-hidden={!wifiEnabled}>
+                          <div className="flex flex-col gap-3 p-1">
+                            <div className="grid grid-cols-1 items-end gap-x-3 gap-y-2 sm:grid-cols-2">
+                              <div className="flex min-w-0 flex-col gap-2">
+                                <FieldLabel>Имя сети (SSID)</FieldLabel>
+                                <input
+                                  type="text"
+                                  autoComplete="off"
+                                  value={wifiSsid}
+                                  onChange={(e) => {
+                                    setWifiSsidEdited(true)
+                                    setWifiSsid(sanitizeWifiSsidInput(e.target.value))
+                                  }}
+                                  onBlur={() => setWifiSsid((ssid) => ssid.trim())}
+                                  placeholder="owl0000"
+                                  className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                                />
+                              </div>
+
+                              <div className="flex min-w-0 flex-col gap-2">
+                                <FieldLabel>Пароль WiFi</FieldLabel>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="text"
+                                    autoComplete="new-password"
+                                    value={wifiPassword}
+                                    onChange={(e) => setWifiPassword(e.target.value)}
+                                    placeholder="Пароль для подключения"
+                                    className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={generateWifiPassword}
+                                    title="Сгенерировать пароль"
+                                    className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                                    aria-label="Сгенерировать пароль WiFi"
+                                  >
+                                    <DiceIcon className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            <ToggleField
+                              label="Скрытая сеть"
+                              checked={wifiHidden}
+                              onChange={() => setWifiHidden((v) => !v)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {isGroovea ? (
+                    <GrooveaWirelessSettings
+                      protocol={grooveaWirelessProtocol}
+                      band={grooveaWirelessBand}
+                      onProtocolChange={setGrooveaWirelessProtocol}
+                      onBandChange={setGrooveaWirelessBand}
+                    />
+                  ) : (
+                    <p className="m-0 text-[13px] leading-relaxed text-label-tertiary">
+                      {CONFIG_FOOTER_NOTE}
+                    </p>
+                  )}
 
                   <ModalFooter>
-                    <BtnSecondary onClick={() => { setIsManualSetup(false); setStep('input') }}>Назад</BtnSecondary>
+                    {isGroovea ? (
+                      <BtnSecondary onClick={closeModal}>Отмена</BtnSecondary>
+                    ) : (
+                      <BtnSecondary onClick={() => setStep('input')}>Назад</BtnSecondary>
+                    )}
                     <BtnPrimary disabled={!canConfirmSettings} onClick={() => setStep('preview')}>
                       Подтвердить
                     </BtnPrimary>
@@ -1083,19 +1658,22 @@ function MikrotikConfigGenerator() {
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
-                    <FieldLabel>Готовый конфиг</FieldLabel>
-                    <span className="text-[12px] leading-relaxed text-label-tertiary">
+                    
+                    <span className="text-[13px] leading-relaxed text-label-tertiary">
                       Вставьте в терминал через WinBox или SSH.
                     </span>
-                    <pre className={`${fieldControlClass} m-0 max-h-[38vh] overflow-auto font-mono text-[12px] leading-[1.7]`}>
+                    {isGroovea && (
+                      <SegmentToggle<GrooveaRole>
+                        value={previewRole}
+                        options={GROOVEA_ROLES}
+                        labels={GROOVEA_ROLE_LABELS}
+                        onChange={setPreviewRole}
+                        ariaLabel="Выбор устройства для просмотра конфига"
+                      />
+                    )}
+                    <pre className={`${fieldControlClass} m-0 max-h-[38vh] overflow-auto font-mono text-[13px] leading-[1.7]`}>
                       <code>{previewText || '(пусто — вернитесь назад и заполните параметры)'}</code>
                     </pre>
-                    <div className="mt-4 -mb-1 rounded-xl border border-tint-blue/25 bg-tint-blue/[0.06] px-4 py-3">
-                      <p className="m-0 text-[12px] leading-relaxed text-label-secondary">
-                        После применения конфига перезагрузите устройство командой{' '}
-                        <code className="font-mono text-label-primary">/system reboot</code>
-                      </p>
-                    </div>
                   </div>
 
                   <ModalFooter>
@@ -1105,7 +1683,7 @@ function MikrotikConfigGenerator() {
                         type="button"
                         disabled={!previewText || !configHeaderText}
                         onClick={handleSave}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-surface-input/80 px-4 py-2.5 text-[13px] font-semibold text-label-secondary shadow-chromeTop transition-colors duration-200 hover:text-label-primary disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-surface-input/80 px-4 py-2.5 text-[14px] font-semibold text-label-secondary shadow-chromeTop transition-colors duration-200 hover:text-label-primary disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
                       >
                         <ArrowDownTrayIcon className="h-4 w-4 shrink-0" />
                         Сохранить
@@ -1114,7 +1692,7 @@ function MikrotikConfigGenerator() {
                         type="button"
                         disabled={!previewText}
                         onClick={handleCopy}
-                        className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-[13px] font-semibold transition-colors duration-200 disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+                        className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-[14px] font-semibold transition-colors duration-200 disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
                           copied
                             ? 'bg-emerald-500/10 text-emerald-300'
                             : 'bg-surface-input/80 text-label-secondary shadow-chromeTop hover:text-label-primary'
@@ -1141,25 +1719,28 @@ function MikrotikConfigGenerator() {
   return (
     <section className="border-surface-border pt-10">
       <header className="mb-6">
-        <h2 className="m-0 text-[13px] font-semibold uppercase tracking-[0.1em] text-label-tertiary">
+        <h2 className="m-0 text-[14px] font-semibold uppercase tracking-[0.1em] text-label-tertiary">
           Генератор конфигов
         </h2>
       
       </header>
 
-      <div className="flex w-full flex-nowrap items-start gap-3">
+      <div className="grid w-full grid-cols-3 gap-3">
         {MIKROTIK_CONFIG_DEVICES.map((d) => {
           const isActive = modalOpen && deviceId === d.id
           return (
             <button
               key={d.id}
               type="button"
+              disabled={d.disabled}
               onClick={() => openForDevice(d.id)}
               aria-label={`Открыть генератор конфига: ${d.label}`}
-              className={`no-drag flex aspect-[9/12] min-h-0 min-w-0 max-w-[184px] flex-[1_1_0] flex-col items-center justify-center overflow-hidden rounded-2xl border text-left shadow-chromeTop transition-[border-color,box-shadow,background-color] duration-200 ${
-                isActive
-                  ? 'border-tint-blue/45 bg-tint-blue/[0.07] ring-1 ring-tint-blue/35'
-                  : 'border-surface-border bg-surface-card/90 hover:border-surface-border hover:bg-white/[0.03]'
+              className={`no-drag flex aspect-[9/12] w-full flex-col items-center justify-center overflow-hidden rounded-2xl border text-left shadow-chromeTop transition-[border-color,box-shadow,background-color] duration-200 ${
+                d.disabled
+                  ? 'cursor-not-allowed border-surface-border/50 bg-surface-card/50 opacity-40'
+                  : isActive
+                    ? 'border-tint-blue/45 bg-tint-blue/[0.07] ring-1 ring-tint-blue/35'
+                    : 'border-surface-border bg-surface-card/90 hover:border-surface-border hover:bg-white/[0.03]'
               } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/55 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-window`}
             >
               <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-2 pt-3 pb-1">
@@ -1172,10 +1753,10 @@ function MikrotikConfigGenerator() {
                   draggable={false}
                 />
               </div>
-              <p className="mt-2.5 text-center text-[12px] font-semibold leading-snug text-label-secondary sm:text-[13px]">
+              <p className="mt-2.5 text-center text-[13px] font-semibold leading-snug text-label-secondary sm:text-[14px]">
                 MikroTik
               </p>
-              <span className="shrink-0 px-2 py-2.5 text-center text-[12px] font-semibold leading-snug text-label-primary sm:text-[13px]">
+              <span className="shrink-0 px-2 py-2.5 text-center text-[13px] font-semibold leading-snug text-label-primary sm:text-[14px]">
                 {d.label}
               </span>
             </button>
@@ -1294,13 +1875,13 @@ export function WinBox() {
         : 'Открыть'
 
   return (
-    <article style={{ paddingBottom: 50 }} className="max-w-[36rem]">
+    <article style={{ paddingBottom: 50, margin: '0 auto' }} className="max-w-[36rem]">
       {/* header */}
       <header className="mb-8">
         <div className="mb-3 flex items-center gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <RouterIcon className="h-7 w-7 shrink-0" />
-            <h1 className="m-0 text-[1.5rem] font-semibold tracking-tighter text-label-primary">
+            <h1 className="m-0 text-[1.625rem] font-semibold tracking-tighter text-label-primary">
               WinBox
             </h1>
           </div>
@@ -1308,7 +1889,7 @@ export function WinBox() {
             type="button"
             disabled={disabled}
             onClick={handlePrimaryAction}
-            className="inline-flex shrink-0 items-center justify-center rounded-md bg-tint-blue px-2.5 py-1 text-[11px] font-semibold tracking-tight text-white shadow-sm transition-colors duration-200
+            className="inline-flex shrink-0 items-center justify-center rounded-md bg-tint-blue px-2.5 py-1.5 text-[12px] font-semibold tracking-tight text-white shadow-sm transition-colors duration-200
               hover:bg-tint-blue-hover active:scale-[0.98]
               disabled:cursor-not-allowed disabled:opacity-40
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-window"
@@ -1316,7 +1897,7 @@ export function WinBox() {
             {primaryLabel}
           </button>
         </div>
-        <p className="text-label-secondary text-[14px] leading-relaxed">
+        <p className="text-label-secondary text-[15px] leading-relaxed">
           С помощью WinBox вы можете настроить любой продукт MikroTik.
         </p>
       </header>
@@ -1325,7 +1906,7 @@ export function WinBox() {
         {/* not bundled warning — та же кнопка: сначала «Загрузить», после — «Открыть» */}
         {!bundled && checkStatus === 'done' && (
           <aside className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3">
-            <p className="m-0 text-[13px] text-amber-400 leading-relaxed">
+            <p className="m-0 text-[14px] text-amber-400 leading-relaxed">
               {expectedName} не найден
               </p>
            
@@ -1337,7 +1918,7 @@ export function WinBox() {
 
         {/* errors */}
         {((openError ?? sidebarOpenError) || downloadError) && (
-          <div className="rounded-xl border border-red-500/25 bg-red-500/8 px-4 py-3 space-y-2 text-[13px] text-red-400">
+          <div className="rounded-xl border border-red-500/25 bg-red-500/8 px-4 py-3 space-y-2 text-[14px] text-red-400">
             {(openError ?? sidebarOpenError) && <p className="m-0">{openError ?? sidebarOpenError}</p>}
             {downloadError && <p className="m-0">{downloadError}</p>}
           </div>

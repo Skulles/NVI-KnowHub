@@ -27,11 +27,11 @@ const TOOLS_SECTION: Section = {
   icon: 'wrench',
   items: [
     {
-      id: 'fuel-calculator',
-      title: 'Расчёт расхода топлива',
+      id: 'monitoring',
+      title: 'Мониторинг',
       type: 'tool',
-      toolId: 'fuel-calculator',
-      icon: 'fuel',
+      toolId: 'monitoring',
+      icon: 'monitoring',
       version: 1
     },
     {
@@ -40,6 +40,14 @@ const TOOLS_SECTION: Section = {
       type: 'tool',
       toolId: 'winbox',
       icon: 'router',
+      version: 1
+    },
+    {
+      id: 'fuel-calculator',
+      title: 'Расчёт расхода топлива',
+      type: 'tool',
+      toolId: 'fuel-calculator',
+      icon: 'fuel',
       version: 1
     }
   ]
@@ -78,8 +86,25 @@ const MOCK_MANIFEST: ContentManifest = {
 
 
 const MIN_INSTRUCTIONS_REFRESH_MS = 3000
+const LAST_SELECTED_ITEM_KEY = 'content-last-selected-item-id-v1'
 
 export { MIN_INSTRUCTIONS_REFRESH_MS }
+
+function loadLastSelectedItemId(): string | null {
+  try {
+    return localStorage.getItem(LAST_SELECTED_ITEM_KEY)
+  } catch {
+    return null
+  }
+}
+
+function saveLastSelectedItemId(itemId: string): void {
+  try {
+    localStorage.setItem(LAST_SELECTED_ITEM_KEY, itemId)
+  } catch {
+    // storage unavailable - ignore
+  }
+}
 
 export const useContentStore = create<ContentStore>((set) => ({
   manifest: null,
@@ -94,6 +119,7 @@ export const useContentStore = create<ContentStore>((set) => ({
   selectItem: async (item) => {
     const { selectedItem } = useContentStore.getState()
     const isSameItem = selectedItem?.id === item.id
+    saveLastSelectedItemId(item.id)
 
     if (item.type === 'tool') {
       set({ selectedItem: item, articleHtml: null, loading: false })
@@ -131,13 +157,17 @@ export async function initContentStore(): Promise<void> {
     manifest = MOCK_MANIFEST
   }
 
-  useContentStore.getState().setManifest(withTools(manifest))
+  const manifestWithTools = withTools(manifest)
+  useContentStore.getState().setManifest(manifestWithTools)
 
   const state = useContentStore.getState()
-  const items = flattenManifestItems(manifest)
+  const items = flattenManifestItems(manifestWithTools)
   const keepCurrent =
     state.selectedItem && items.find((item) => item.id === state.selectedItem!.id)
-  const target = keepCurrent ?? items[0]
+  const lastSelectedId = loadLastSelectedItemId()
+  const lastSelected = lastSelectedId ? items.find((item) => item.id === lastSelectedId) : undefined
+  const monitoring = items.find((item) => item.id === 'monitoring')
+  const target = keepCurrent ?? lastSelected ?? monitoring ?? items[0]
 
   if (target) {
     await useContentStore.getState().selectItem(target)

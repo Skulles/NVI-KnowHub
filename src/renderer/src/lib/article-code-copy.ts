@@ -36,6 +36,7 @@ function createCopyButton(getText: () => string): {
     destroy: () => {
       if (resetTimer) clearTimeout(resetTimer)
       btn.removeEventListener('click', onClick)
+      btn.remove()
     }
   }
 }

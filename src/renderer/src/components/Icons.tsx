@@ -119,6 +119,20 @@ export const DiceIcon = ({ className = 'w-4 h-4' }: IconProps): React.ReactEleme
   </svg>
 )
 
+export const MonitoringIcon = ({ className = 'w-4 h-4' }: IconProps): React.ReactElement => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className={className} aria-hidden>
+    <path
+      d="M3 12h3.2l2-5.5 3.3 11 2.8-7.5 1.7 2h5"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+    />
+    <circle cx="19" cy="12" r="2.25" fill="currentColor" />
+  </svg>
+)
+
 export const ClipboardDocumentIcon = ({ className = 'w-4 h-4' }: IconProps): React.ReactElement => (
   <svg {...svgSolid} className={className} aria-hidden>
     <path
@@ -158,6 +172,7 @@ export const ToolIcon = ({ name, className }: { name?: string; className?: strin
   switch (name) {
     case 'fuel': return <FuelPumpIcon className={className} />
     case 'router': return <RouterIcon className={className} />
+    case 'monitoring': return <MonitoringIcon className={className} />
     default: return <CubeIcon className={className} />
   }
 }

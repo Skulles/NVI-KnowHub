@@ -17,6 +17,16 @@ export default function App(): React.ReactElement {
     initContentStore()
   }, [])
 
+  useEffect(() => {
+    const preventImageDragSave = (event: DragEvent): void => {
+      if (event.target instanceof HTMLImageElement) {
+        event.preventDefault()
+      }
+    }
+    document.addEventListener('dragstart', preventImageDragSave)
+    return () => document.removeEventListener('dragstart', preventImageDragSave)
+  }, [])
+
   useLayoutEffect(() => {
     if (!window.api) return
 

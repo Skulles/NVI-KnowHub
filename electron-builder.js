@@ -70,7 +70,16 @@ module.exports = {
     }
   ],
   win: {
-    target: 'nsis'
+    target: 'nsis',
+    // Ярлык и .exe берут иконку из .ico (не из extraResources/icon.png).
+    icon: 'build/icon.ico'
+  },
+  nsis: {
+    installerIcon: 'build/icon.ico',
+    uninstallerIcon: 'build/icon.ico',
+    // Пересоздавать ярлык при переустановке (иначе остаётся старая иконка Electron).
+    createDesktopShortcut: 'always',
+    shortcutName: 'NVI KnowHub'
   },
   mac: {
     // Squirrel.Mac / electron-updater скачивает .zip для in-place update; один .dmg ломает автообновление.

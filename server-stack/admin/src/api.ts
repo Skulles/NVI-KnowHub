@@ -139,6 +139,8 @@ export interface PublishArticleResult {
   hasUnpublishedChanges: boolean
 }
 
+export interface DiscardArticleChangesResult extends ArticleDraft {}
+
 export interface UploadFileResult {
   url: string
 }
@@ -178,6 +180,8 @@ export const api = {
   }) => request<SaveArticleResult>('POST', '/api/articles', draft),
   publishArticle: (id: string) =>
     request<PublishArticleResult>('POST', `/api/articles/${id}/publish`, {}),
+  discardArticleChanges: (id: string) =>
+    request<DiscardArticleChangesResult>('POST', `/api/articles/${id}/discard-changes`, {}),
   deleteArticle: (id: string) => request<{ ok: boolean }>('DELETE', `/api/articles/${id}`),
   uploadFile: (dataUrl: string) => request<UploadFileResult>('POST', '/api/uploads', { dataUrl }),
   getManifest: () => request<Manifest>('GET', '/api/manifest'),

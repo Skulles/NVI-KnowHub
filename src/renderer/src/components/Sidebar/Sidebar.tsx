@@ -22,7 +22,7 @@ function SectionItem({ item, onSelect, isSelected }: {
       type="button"
       onClick={() => onSelect(item)}
       className={`
-        group relative w-full flex items-center rounded-lg text-[13px] text-left tracking-tight
+        group relative w-full flex items-center rounded-lg text-[14px] text-left tracking-tight
         transition-colors duration-150 ease-out border-l-[3px] border-transparent
         ${tool ? 'gap-2.5 px-2.5 py-1.5' : 'gap-0 px-2.5 py-2'}
         ${focusRow}
@@ -58,7 +58,7 @@ function SubsectionBlock({ subsection, selectedId, onSelect, isFirst }: {
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[12px] font-medium text-label-secondary hover:bg-white/[0.05] hover:text-label-primary transition-colors duration-150 ${focusRow}`}
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] font-medium text-label-secondary hover:bg-white/[0.05] hover:text-label-primary transition-colors duration-150 ${focusRow}`}
       >
         <ChevronRightIcon
           className={`w-3 h-3 flex-shrink-0 opacity-60 transition-transform duration-200 ease-out ${collapsed ? '' : 'rotate-90'}`}
@@ -94,7 +94,7 @@ function SectionGroup({ section, selectedId, onSelect }: {
       aria-busy={section.id === INSTRUCTIONS_SECTION_ID && !!instructionsRefresh}
       aria-live={section.id === INSTRUCTIONS_SECTION_ID ? 'polite' : undefined}
     >
-      <div className="flex items-center gap-2 px-2 py-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-label-tertiary">
+      <div className="flex items-center gap-2 px-2 py-2 text-[12.5px] font-semibold uppercase tracking-[0.12em] text-label-tertiary">
         {section.id === INSTRUCTIONS_SECTION_ID && instructionsRefresh ? (
           <ArrowPathIcon className="w-4 h-4 flex-shrink-0 text-label-secondary opacity-80 animate-spin" />
         ) : (
@@ -137,19 +137,19 @@ export function Sidebar(): React.ReactElement {
   const selectItem = useContentStore((s) => s.selectItem)
 
   return (
-    <aside className="flex flex-col h-full w-[268px] flex-shrink-0 bg-surface-sidebar border-r border-surface-border">
+    <aside className="flex flex-col h-full w-[268px] flex-shrink-0 select-none bg-surface-sidebar border-r border-surface-border">
       <div className="px-3.5 pt-4 pb-3.5 border-surface-border drag-region shrink-0">
         <div className="flex items-center gap-3.5 no-drag">
           <KnowHubLogoMark className="h-[52px] w-[52px] shrink-0 text-white" />
-          <div className="min-w-0 flex-1 flex flex-col gap-1" style={{zoom: 0.9}}>
+          <div className="min-w-0 flex-1 flex flex-col gap-1">
             <div className="grid w-max max-w-full">
               <span
                 aria-hidden
-                className="col-start-1 row-start-1 invisible whitespace-nowrap text-[9px] font-medium uppercase tracking-[0.13em] leading-tight"
+                className="col-start-1 row-start-1 invisible whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.13em] leading-tight"
               >
                 {BRAND_SUBTITLE}
               </span>
-              <span className="col-start-1 row-start-1 self-center font-brand text-[26px] font-bold leading-[1.05] tracking-[0.02em] text-white whitespace-nowrap">
+              <span className="col-start-1 row-start-1 self-center font-brand text-[27px] font-bold leading-[1.05] tracking-[0.02em] text-white whitespace-nowrap">
                 KnowHub
               </span>
             </div>
@@ -171,7 +171,7 @@ export function Sidebar(): React.ReactElement {
         ))}
 
         {!manifest && (
-          <div className="px-3 py-12 text-center text-[13px] text-label-tertiary">
+          <div className="px-3 py-12 text-center text-[14px] text-label-tertiary">
             Загрузка…
           </div>
         )}

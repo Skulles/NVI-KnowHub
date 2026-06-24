@@ -24,6 +24,7 @@ import { TableCellContextMenu } from './TableCellContextMenu'
 import { api, ArticleDraft, SectionTarget } from '../api'
 import { PublishDialog } from './PublishDialog'
 import { PublishStatusBadge } from './PublishStatusBadge'
+import { useConfirm } from './ConfirmDialog'
 import { titleToHtmlFile } from '../utils'
 import { ensureTableHeaderRows } from '../lib/ensure-table-header-rows'
 import { CodeBlockKeyboardExtension } from '../lib/code-block-keyboard-extension'
@@ -139,6 +140,7 @@ function newArticleId(): string {
 }
 
 export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved }: Props): React.ReactElement {
+  const confirm = useConfirm()
   const [title, setTitle] = useState('')
   const [lead, setLead] = useState('')
   const [published, setPublished] = useState(false)
@@ -149,6 +151,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
   const [showPublishDialog, setShowPublishDialog] = useState(false)
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0)
   const currentIdRef = useRef<string | null>(draftId ?? newArticleId())
@@ -210,6 +213,43 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
     },
   })
 
+  const applyDraftToEditor = useCallback((draft: ArticleDraft): void => {
+    setTitle(draft.title)
+    setLead(draft.lead ?? '')
+    applySaveMeta({
+      htmlFile: draft.htmlFile,
+      published: draft.published,
+      publishedAt: draft.publishedAt,
+      updatedAt: draft.updatedAt,
+      hasUnpublishedChanges: draft.hasUnpublishedChanges
+    })
+    if (draft.sectionId) {
+      onTargetLoaded({
+        sectionId: draft.sectionId,
+        sectionTitle: draft.sectionTitle,
+        sectionIcon: draft.sectionIcon || 'book',
+        subsectionId: draft.subsectionId || undefined,
+        subsectionTitle: draft.subsectionTitle || undefined
+      })
+    }
+    if (draft.blocks?.length) {
+      const alignMeta = extractTableAlignmentsFromBlocks(draft.blocks)
+      const normalized = normalizeTableBlocksForEditor(draft.blocks)
+      editor.replaceBlocks(
+        editor.document,
+        normalized as Parameters<typeof editor.replaceBlocks>[1]
+      )
+      requestAnimationFrame(() => {
+        ensureTableHeaderRows(editor)
+        applyTableCellAlignments(editor, alignMeta)
+      })
+    } else {
+      editor.replaceBlocks(editor.document, [
+        { type: 'paragraph', content: '' }
+      ] as Parameters<typeof editor.replaceBlocks>[1])
+    }
+  }, [editor, applySaveMeta, onTargetLoaded])
+
   useEffect(() => {
     if (!draftId) {
       hydrationRef.current = false
@@ -234,36 +274,7 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
     api
       .getArticle(draftId)
       .then((draft: ArticleDraft) => {
-        setTitle(draft.title)
-        setLead(draft.lead ?? '')
-        applySaveMeta({
-          htmlFile: draft.htmlFile,
-          published: draft.published,
-          publishedAt: draft.publishedAt,
-          updatedAt: draft.updatedAt,
-          hasUnpublishedChanges: draft.hasUnpublishedChanges
-        })
-        if (draft.sectionId) {
-          onTargetLoaded({
-            sectionId: draft.sectionId,
-            sectionTitle: draft.sectionTitle,
-            sectionIcon: draft.sectionIcon || 'book',
-            subsectionId: draft.subsectionId || undefined,
-            subsectionTitle: draft.subsectionTitle || undefined
-          })
-        }
-        if (draft.blocks?.length) {
-          const alignMeta = extractTableAlignmentsFromBlocks(draft.blocks)
-          const normalized = normalizeTableBlocksForEditor(draft.blocks)
-          editor.replaceBlocks(
-            editor.document,
-            normalized as Parameters<typeof editor.replaceBlocks>[1]
-          )
-          requestAnimationFrame(() => {
-            ensureTableHeaderRows(editor)
-            applyTableCellAlignments(editor, alignMeta)
-          })
-        }
+        applyDraftToEditor(draft)
       })
       .catch(console.error)
       .finally(() => {
@@ -366,6 +377,43 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [save])
+
+  const handleDiscardChanges = async (): Promise<void> => {
+    const id = currentIdRef.current
+    if (!id || !hasUnpublishedChanges) return
+
+    const ok = await confirm({
+      title: 'Отменить неопубликованные изменения?',
+      message:
+        'Черновик вернётся к версии, которая сейчас в приложении. Это действие нельзя отменить.',
+      variant: 'danger',
+      confirmLabel: 'Отменить изменения'
+    })
+    if (!ok) return
+
+    if (debounceSaveRef.current) {
+      clearTimeout(debounceSaveRef.current)
+      debounceSaveRef.current = null
+    }
+
+    setDiscarding(true)
+    hydrationRef.current = true
+    try {
+      const draft = await api.discardArticleChanges(id)
+      dirtyRef.current = false
+      applyDraftToEditor(draft)
+      setStatus('Изменения отменены')
+      setTimeout(() => setStatus(null), 3000)
+      onSaved(id)
+    } catch (e) {
+      setStatus(`Ошибка: ${(e as Error).message}`)
+    } finally {
+      setDiscarding(false)
+      setTimeout(() => {
+        hydrationRef.current = false
+      }, 0)
+    }
+  }
 
   const handlePublish = async (): Promise<void> => {
     setShowPublishDialog(false)
@@ -518,15 +566,25 @@ export function Editor({ draftId, targetSection, onTargetLoaded, onBack, onSaved
         <button
           type="button"
           onClick={() => save().catch(console.error)}
-          disabled={saving}
+          disabled={saving || discarding}
           className="admin-btn-secondary"
         >
           {saving ? 'Сохранение…' : 'Сохранить'}
         </button>
+        {hasUnpublishedChanges && (
+          <button
+            type="button"
+            onClick={() => { void handleDiscardChanges() }}
+            disabled={discarding || publishing || saving}
+            className="rounded-lg px-3 py-1.5 text-[13px] font-medium text-red-400 border border-red-500/30 bg-red-500/[0.08] hover:bg-red-500/[0.14] disabled:opacity-50 disabled:pointer-events-none transition-colors"
+          >
+            {discarding ? 'Отмена…' : 'Отменить изменения'}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowPublishDialog(true)}
-          disabled={publishing || !canPublish}
+          disabled={publishing || discarding || !canPublish}
           className="admin-btn-primary"
           title={!canPublish && published ? 'Нет изменений для публикации' : undefined}
         >
