@@ -1,3 +1,6 @@
+/**
+ * DOM sanitize for code-hint tooltip HTML before showing in the renderer.
+ */
 const ALLOWED_HINT_TAGS = new Set(['P', 'IMG', 'BR', 'STRONG', 'EM', 'B', 'I', 'U', 'SPAN'])
 
 export function sanitizeCodeHintHtml(html: string): string {

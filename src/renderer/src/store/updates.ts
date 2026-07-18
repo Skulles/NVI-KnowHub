@@ -1,3 +1,6 @@
+/**
+ * Zustand store: app-update download/install toast state and postpone flag.
+ */
 import { create } from 'zustand'
 
 const APP_UPDATE_POSTPONE_KEY = 'knowhub-app-update-install-next-launch'

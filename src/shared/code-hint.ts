@@ -1,3 +1,6 @@
+/**
+ * Encode/decode inline code-hint attributes used in published article HTML.
+ */
 export const CODE_HINT_CLASS = 'code-with-hint'
 export const CODE_HINT_ATTR = 'data-hint'
 

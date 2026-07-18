@@ -1,3 +1,6 @@
+/**
+ * Attach hover tooltips for article elements with data-hint / code-hint markup.
+ */
 import { CODE_HINT_ATTR, CODE_HINT_CLASS, decodeCodeHintHtml } from './code-hint'
 import { sanitizeCodeHintHtml } from './code-hint-sanitize'
 

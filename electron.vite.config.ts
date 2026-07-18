@@ -1,3 +1,7 @@
+/**
+ * electron-vite config: main / preload / renderer entries, path aliases,
+ * and compile-time KNOWHUB_SERVER_URL for the main process.
+ */
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'

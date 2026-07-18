@@ -1,3 +1,6 @@
+/**
+ * Contract for window.api (preload → renderer) and related IPC result types.
+ */
 import type { ContentManifest } from './types'
 
 export interface WinboxUpdateInfo {

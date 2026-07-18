@@ -1,3 +1,6 @@
+/**
+ * DOMPurify allowlist for published article HTML before innerHTML render.
+ */
 import DOMPurify from 'dompurify'
 
 const ARTICLE_ALLOWED_TAGS = [

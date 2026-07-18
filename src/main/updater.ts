@@ -1,3 +1,7 @@
+/**
+ * electron-updater wiring: check / download / install app updates
+ * and notify the renderer over IPC.
+ */
 import { autoUpdater } from 'electron-updater'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { logger } from './logger'

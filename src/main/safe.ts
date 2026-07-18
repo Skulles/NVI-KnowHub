@@ -1,3 +1,7 @@
+/**
+ * URL allowlisting and safe resolution of content HTML paths
+ * (path-traversal guards for userData/content).
+ */
 import { isAbsolute, relative, resolve, sep } from 'path'
 
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])

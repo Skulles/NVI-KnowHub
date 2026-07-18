@@ -1,3 +1,7 @@
+/**
+ * Preload bridge: exposes typed window.api via contextBridge.
+ * Renderer must not import Node/Electron APIs directly.
+ */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ElectronAPI } from '../shared/api'
 

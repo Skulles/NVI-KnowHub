@@ -1,3 +1,6 @@
+/**
+ * Main-process ICMP ping batch IPC used by the Monitoring tool.
+ */
 import { execFile } from 'child_process'
 import { ipcMain } from 'electron'
 import type { MonitoringPingResult, MonitoringPingTarget } from '../shared/api'

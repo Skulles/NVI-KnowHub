@@ -1,3 +1,7 @@
+/**
+ * Electron main process entry: single-instance lock, BrowserWindow,
+ * security hooks, and IPC wiring for content / updater / WinBox / monitoring.
+ */
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'

@@ -1,3 +1,7 @@
+/**
+ * Seeds and syncs knowledge-base HTML into userData/content from
+ * KNOWHUB_SERVER_URL; exposes getManifest / getArticleHtml for IPC.
+ */
 import { app, BrowserWindow, net } from 'electron'
 import { join, dirname } from 'path'
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'

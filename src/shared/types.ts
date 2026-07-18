@@ -1,3 +1,7 @@
+/**
+ * Shared content model: manifest, sections, subsections, and items
+ * (articles and tools) used by main and renderer.
+ */
 export interface ContentManifest {
   version: number
   sections: Section[]

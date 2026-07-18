@@ -1,3 +1,6 @@
+/**
+ * Rotating file logger under userData and process-level error handlers.
+ */
 import { app } from 'electron'
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'fs'
 import { join } from 'path'

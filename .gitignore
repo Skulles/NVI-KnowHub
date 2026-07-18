@@ -27,6 +27,13 @@ server-stack/.env
 # ─── Server runtime data (Docker volume mount) ────────────────────────────────
 server-stack/data/
 
+# ─── Editor / IDE (VS Code, Cursor, Claude Code, cloud dev) ──────────────────
+.vscode/
+.cursor/
+.claude/
+.devcontainer/
+*.code-workspace
+
 # ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
@@ -45,3 +52,8 @@ src/**/*.js
 src/**/*.jsx
 src/**/*.d.ts
 !src/renderer/src/env.d.ts
+
+# Accidental root emits (source of truth is electron.vite.config.ts / src/main)
+/index.js
+/electron.vite.config.js
+/electron.vite.config.d.ts

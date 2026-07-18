@@ -1,3 +1,7 @@
+/**
+ * Manifest helpers: flatten section items whether they use flat items
+ * and/or nested subsections.
+ */
 import type { ContentManifest, ContentItem, Section } from './types'
 
 /** Все пункты содержания секции манифеста (учитывает подразделы). */

@@ -1,3 +1,7 @@
+/**
+ * WinBox install/launch helpers and IPC: bundled resources, userData copy,
+ * MikroTik download, and update checks for the WinBox tool.
+ */
 import { ipcMain, shell, app } from 'electron'
 import {
   existsSync,

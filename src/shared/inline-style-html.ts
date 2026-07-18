@@ -1,3 +1,6 @@
+/**
+ * Map BlockNote text/background color styles to HTML data attributes / wrappers.
+ */
 export type InlineStyleMap = Record<string, string | boolean>
 
 export function wrapBlockNoteColorStyles(text: string, styles: InlineStyleMap): string {

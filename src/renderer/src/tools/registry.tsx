@@ -1,3 +1,6 @@
+/**
+ * toolId → React component map for interactive tools embedded in the app.
+ */
 import React from 'react'
 import { FuelCalculator } from './FuelCalculator/FuelCalculator'
 import { Monitoring } from './Monitoring/Monitoring'

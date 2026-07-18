@@ -1,3 +1,7 @@
+/**
+ * electron-builder packaging: platform targets, extraResources,
+ * and publish URL derived from KNOWHUB_* env vars.
+ */
 const { readFileSync, existsSync } = require('fs')
 const { join } = require('path')
 

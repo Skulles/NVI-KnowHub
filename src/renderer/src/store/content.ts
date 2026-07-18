@@ -1,3 +1,7 @@
+/**
+ * Zustand store: manifest, selection, article HTML, and tools section
+ * (with mock fallback when window.api is unavailable).
+ */
 import { create } from 'zustand'
 import type { ContentManifest, ContentItem, Section } from '@shared/types'
 import { flattenManifestItems } from '@shared/manifest'

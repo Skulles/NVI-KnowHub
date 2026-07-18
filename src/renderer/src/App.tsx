@@ -1,3 +1,6 @@
+/**
+ * App shell: sidebar + content area, content init, update IPC subscriptions.
+ */
 import React, { useEffect, useLayoutEffect } from 'react'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { ContentArea } from './components/ContentArea/ContentArea'

@@ -12,6 +12,13 @@ admin/node_modules/
 # Environment (contains secrets)
 .env
 
+# Editor / IDE (VS Code, Cursor, Claude Code, cloud dev)
+.vscode/
+.cursor/
+.claude/
+.devcontainer/
+*.code-workspace
+
 # OS
 .DS_Store
 Thumbs.db

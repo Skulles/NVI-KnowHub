@@ -1,3 +1,6 @@
+/**
+ * Zustand store: WinBox availability / update check UI state.
+ */
 import { create } from 'zustand'
 
 type CheckStatus = 'idle' | 'checking' | 'done' | 'error'
