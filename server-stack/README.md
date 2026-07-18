@@ -24,9 +24,5 @@ cd admin && npm install && npm run dev
 
 Подробности окружения — в `server/.env.example` / корневом `server-stack/.env.example`.
 
-## Документация по эксплуатации
-
-- [SERVER_NOTES.md](./SERVER_NOTES.md) — пути на сервере, health, troubleshooting
-- [UPDATE.md](./UPDATE.md) — выкладка без Docker
 
 Desktop-приложение ходит на `{KNOWHUB_SERVER_URL}/content/manifest.json` и каталог `/releases/` для автообновлений.
