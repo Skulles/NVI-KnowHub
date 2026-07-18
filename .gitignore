@@ -35,3 +35,13 @@ desktop.ini
 # ─── Temp / debug files ───────────────────────────────────────────────────────
 nul
 test-minimal-main.js
+build/.icon-sizes/
+
+# Stale JS emit that shadows TypeScript sources
+**/*.jsx
+
+# Stale compiled JS/JSX that shadows TypeScript sources (never commit)
+src/**/*.js
+src/**/*.jsx
+src/**/*.d.ts
+!src/renderer/src/env.d.ts

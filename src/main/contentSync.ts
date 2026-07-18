@@ -1,12 +1,38 @@
 import { app, BrowserWindow, net } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import type { ContentManifest } from '../shared/types'
 import { flattenManifestItems } from '../shared/manifest'
+import { resolveContentHtmlPath } from './safe'
+import { logger } from './logger'
 
-function serverUrl(): string {
+const FETCH_TIMEOUT_MS = 30_000
+const MAX_RESPONSE_BYTES = 15 * 1024 * 1024
+
+function serverUrl(): string | null {
   const raw = process.env['KNOWHUB_SERVER_URL']?.trim()
-  return raw || 'http://localhost:3000'
+  if (!raw) {
+    if (app.isPackaged) {
+      logger.error('Content sync: KNOWHUB_SERVER_URL is not set in packaged build')
+      return null
+    }
+    return 'http://localhost:3000'
+  }
+
+  if (app.isPackaged) {
+    try {
+      const parsed = new URL(raw)
+      if (parsed.protocol !== 'https:') {
+        logger.error(`Content sync: packaged builds require HTTPS server URL, got ${parsed.protocol}`)
+        return null
+      }
+    } catch {
+      logger.error(`Content sync: invalid KNOWHUB_SERVER_URL: ${raw}`)
+      return null
+    }
+  }
+
+  return raw.replace(/\/+$/, '')
 }
 
 function getContentDir(): string {
@@ -24,6 +50,10 @@ function ensureContentDir(): void {
   }
 }
 
+function safeHtmlPath(htmlFile: string): string | null {
+  return resolveContentHtmlPath(getContentDir(), htmlFile)
+}
+
 export function getManifest(): ContentManifest | null {
   ensureContentDir()
   const manifestPath = getManifestPath()
@@ -36,8 +66,8 @@ export function getManifest(): ContentManifest | null {
 }
 
 export function getArticleHtml(htmlFile: string): string | null {
-  const filePath = join(getContentDir(), htmlFile)
-  if (!existsSync(filePath)) return null
+  const filePath = safeHtmlPath(htmlFile)
+  if (!filePath || !existsSync(filePath)) return null
   try {
     return readFileSync(filePath, 'utf-8')
   } catch {
@@ -45,43 +75,66 @@ export function getArticleHtml(htmlFile: string): string | null {
   }
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+function fetchWithLimit(url: string, asJson: false): Promise<string>
+function fetchWithLimit<T>(url: string, asJson: true): Promise<T>
+function fetchWithLimit(url: string, asJson: boolean): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const request = net.request(url)
     let data = ''
-    request.on('response', (response) => {
-      const status = response.statusCode ?? 0
-      response.on('data', (chunk) => { data += chunk })
-      response.on('end', () => {
-        if (status < 200 || status >= 300) {
-          reject(new Error(`HTTP ${status} for ${url}`))
-          return
-        }
-        try { resolve(JSON.parse(data) as T) }
-        catch (e) { reject(e) }
-      })
-    })
-    request.on('error', reject)
-    request.end()
-  })
-}
+    let settled = false
 
-async function fetchText(url: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const request = net.request(url)
-    let data = ''
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try {
+        request.abort()
+      } catch {
+        /* ignore */
+      }
+      reject(new Error(`Timeout after ${FETCH_TIMEOUT_MS}ms for ${url}`))
+    }, FETCH_TIMEOUT_MS)
+
+    const finish = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      fn()
+    }
+
     request.on('response', (response) => {
       const status = response.statusCode ?? 0
-      response.on('data', (chunk) => { data += chunk })
-      response.on('end', () => {
-        if (status < 200 || status >= 300) {
-          reject(new Error(`HTTP ${status} for ${url}`))
-          return
+      response.on('data', (chunk) => {
+        data += chunk
+        if (data.length > MAX_RESPONSE_BYTES) {
+          finish(() => reject(new Error(`Response too large for ${url}`)))
+          try {
+            request.abort()
+          } catch {
+            /* ignore */
+          }
         }
-        resolve(data)
+      })
+      response.on('end', () => {
+        finish(() => {
+          if (status < 200 || status >= 300) {
+            reject(new Error(`HTTP ${status} for ${url}`))
+            return
+          }
+          if (asJson) {
+            try {
+              resolve(JSON.parse(data))
+            } catch (e) {
+              reject(e)
+            }
+          } else {
+            resolve(data)
+          }
+        })
       })
     })
-    request.on('error', reject)
+    request.on('error', (err) => {
+      finish(() => reject(err))
+    })
     request.end()
   })
 }
@@ -92,16 +145,22 @@ function mergeManifests(local: ContentManifest, remote: ContentManifest): Conten
   return { version: remote.version, sections: [...localOnlySections, ...remote.sections] }
 }
 
+function sendContentUpdated(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  window.webContents.send('content:updated')
+}
+
 async function syncContent(window: BrowserWindow): Promise<void> {
   ensureContentDir()
   const local = getManifest()
   const baseUrl = serverUrl()
+  if (!baseUrl) return
 
   let remote: ContentManifest
   try {
-    remote = await fetchJson<ContentManifest>(`${baseUrl}/content/manifest.json`)
+    remote = await fetchWithLimit<ContentManifest>(`${baseUrl}/content/manifest.json`, true)
   } catch (e) {
-    console.error('Content sync: failed to fetch manifest:', e)
+    logger.error('Content sync: failed to fetch manifest', e)
     return
   }
 
@@ -127,22 +186,43 @@ async function syncContent(window: BrowserWindow): Promise<void> {
     return
   }
 
+  let downloadFailures = 0
+
   for (const item of toDownload) {
     if (!item.htmlFile) continue
+    const dest = safeHtmlPath(item.htmlFile)
+    if (!dest) {
+      logger.warn(`Content sync: rejected unsafe htmlFile ${item.htmlFile}`)
+      downloadFailures += 1
+      continue
+    }
     try {
-      const html = await fetchText(`${baseUrl}/content/${item.htmlFile}`)
-      const dest = join(getContentDir(), item.htmlFile)
-      const dir = dest.substring(0, Math.max(dest.lastIndexOf('/'), dest.lastIndexOf('\\')))
+      const html = await fetchWithLimit(`${baseUrl}/content/${item.htmlFile}`, false)
+      const dir = dirname(dest)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       writeFileSync(dest, html, 'utf-8')
     } catch (e) {
-      console.error(`Content sync: failed to download ${item.htmlFile}:`, e)
+      downloadFailures += 1
+      logger.error(`Content sync: failed to download ${item.htmlFile}`, e)
     }
   }
 
+  if (downloadFailures > 0) {
+    logger.warn(`Content sync: skipped manifest update after ${downloadFailures} download failure(s)`)
+    return
+  }
+
   for (const htmlFile of removedHtmlFiles) {
-    const path = join(getContentDir(), htmlFile)
-    if (existsSync(path)) unlinkSync(path)
+    const path = safeHtmlPath(htmlFile)
+    if (!path) {
+      logger.warn(`Content sync: skipped unsafe delete ${htmlFile}`)
+      continue
+    }
+    try {
+      if (existsSync(path)) unlinkSync(path)
+    } catch (e) {
+      logger.error(`Content sync: failed to delete ${htmlFile}`, e)
+    }
   }
 
   const merged = local ? mergeManifests(local, remote) : remote
@@ -151,7 +231,7 @@ async function syncContent(window: BrowserWindow): Promise<void> {
   )
   const catalog = hasLocalOnlySections ? merged : remote
   writeFileSync(getManifestPath(), JSON.stringify(catalog, null, 2), 'utf-8')
-  window.webContents.send('content:updated')
+  sendContentUpdated(window)
 }
 
 function getBundledContentDir(): string {
@@ -196,7 +276,7 @@ function seedFromBundled(): void {
 /** Даём рендереру успеть навесить `ipcRenderer.on('content:updated')`, иначе первое событие теряется. */
 function scheduleInitialSync(window: BrowserWindow): void {
   const run = (): void => {
-    void syncContent(window).catch(console.error)
+    void syncContent(window).catch((e) => logger.error('Content sync failed', e))
   }
   const schedule = (): void => {
     setTimeout(run, 280)

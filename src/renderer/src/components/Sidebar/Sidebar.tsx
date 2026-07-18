@@ -45,11 +45,12 @@ function SectionItem({ item, onSelect, isSelected }: {
   )
 }
 
-function SubsectionBlock({ subsection, selectedId, onSelect, isFirst }: {
+function SubsectionBlock({ subsection, selectedId, onSelect, isFirst, mutedHeader = false }: {
   subsection: Subsection
   selectedId: string | null
   onSelect: (item: ContentItem) => void
   isFirst: boolean
+  mutedHeader?: boolean
 }): React.ReactElement {
   const [collapsed, setCollapsed] = React.useState(false)
 
@@ -58,10 +59,16 @@ function SubsectionBlock({ subsection, selectedId, onSelect, isFirst }: {
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
-        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] font-medium text-label-secondary hover:bg-white/[0.05] hover:text-label-primary transition-colors duration-150 ${focusRow}`}
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] transition-colors duration-150 ${focusRow} ${
+          mutedHeader
+            ? 'font-normal text-label-tertiary/75 hover:bg-white/[0.04] hover:text-label-tertiary'
+            : 'font-medium text-label-secondary hover:bg-white/[0.05] hover:text-label-primary'
+        }`}
       >
         <ChevronRightIcon
-          className={`w-3 h-3 flex-shrink-0 opacity-60 transition-transform duration-200 ease-out ${collapsed ? '' : 'rotate-90'}`}
+          className={`w-3 h-3 flex-shrink-0 transition-transform duration-200 ease-out ${collapsed ? '' : 'rotate-90'} ${
+            mutedHeader ? 'opacity-40' : 'opacity-60'
+          }`}
         />
         <span className="flex-1 text-left leading-snug">{subsection.title}</span>
       </button>
@@ -112,6 +119,7 @@ function SectionGroup({ section, selectedId, onSelect }: {
               selectedId={selectedId}
               onSelect={onSelect}
               isFirst={i === 0}
+              mutedHeader={section.id === INSTRUCTIONS_SECTION_ID}
             />
           ))
         ) : (
@@ -171,8 +179,8 @@ export function Sidebar(): React.ReactElement {
         ))}
 
         {!manifest && (
-          <div className="px-3 py-12 text-center text-[14px] text-label-tertiary">
-            Загрузка…
+          <div className="flex items-center justify-center px-6 py-12" aria-busy aria-label="Загрузка">
+            <div className="knowhub-spinner" aria-hidden />
           </div>
         )}
       </nav>

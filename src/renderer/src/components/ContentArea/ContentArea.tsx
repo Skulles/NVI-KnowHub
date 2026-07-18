@@ -1,13 +1,14 @@
 import React, { useMemo, useRef, useLayoutEffect } from 'react'
 import { attachArticleCodeCopyButtons } from '../../lib/article-code-copy'
+import { sanitizeArticleHtml } from '../../lib/sanitize-article-html'
 import { attachArticleCodeHints } from '../../lib/article-code-hints'
 import { useContentStore } from '../../store/content'
 import { getToolComponent } from '../../tools/registry'
-import { BookIcon } from '../Icons'
 import { ArticleToc, TocNav, articleHasToc, splitBodyAtFirstHeading } from './TableOfContents'
 
 function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHtml: string } {
-  let rest = html.replace(/^\s*<h1\b[^>]*>[\s\S]*?<\/h1>/i, '').trim()
+  const safeHtml = sanitizeArticleHtml(html)
+  const rest = safeHtml.replace(/^\s*<h1\b[^>]*>[\s\S]*?<\/h1>/i, '').trim()
   const leadRe = /^<p[^>]*\bclass="[^"]*\blead\b[^"]*"[^>]*>([\s\S]*?)<\/p>\s*/i
   const match = rest.match(leadRe)
   if (match) {
@@ -186,25 +187,20 @@ function ToolView({ toolId }: { toolId: string }): React.ReactElement {
   )
 }
 
-function EmptyState(): React.ReactElement {
+function ContentSpinner({ label = 'Загрузка' }: { label?: string }): React.ReactElement {
   return (
-    <div className="flex min-h-[min(440px,calc(100vh-13rem))] flex-col items-center justify-center px-6 select-none">
-      <div
-        className="relative mb-8 flex h-[5.25rem] w-[5.25rem] items-center justify-center rounded-[1.375rem]
-          bg-gradient-to-br from-surface-raised via-surface-card to-surface-window shadow-sheet ring-1 ring-surface-border"
-        aria-hidden
-      >
-        <div className="absolute inset-0 rounded-[1.375rem] bg-gradient-to-t from-transparent to-tint-blue/16" />
-        <BookIcon className="relative h-[2rem] w-[2rem] text-label-primary/35" />
-      </div>
-      <p className="mb-2 text-center text-lg font-semibold tracking-tight text-label-primary">
-        Выберите материал
-      </p>
-      <p className="max-w-[26rem] text-center text-[15px] leading-relaxed text-label-secondary">
-        Выберите пункт в дереве слева. Работа без подключения к сети.
-      </p>
+    <div
+      className="flex min-h-[min(440px,calc(100vh-13rem))] flex-col items-center justify-center px-6 select-none"
+      aria-busy
+      aria-label={label}
+    >
+      <div className="knowhub-spinner" aria-hidden />
     </div>
   )
+}
+
+function EmptyState(): React.ReactElement {
+  return <ContentSpinner />
 }
 
 function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElement {
@@ -266,7 +262,11 @@ function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElemen
 
 function LoadingState(): React.ReactElement {
   return (
-    <div className="mx-auto max-w-xl animate-pulse rounded-2xl border border-surface-border/80 bg-surface-card/50 p-12 shadow-sheet" aria-busy aria-label="Загрузка">
+    <div
+      className="mx-auto max-w-xl animate-pulse rounded-2xl border border-surface-border/80 bg-surface-card/50 p-12 shadow-sheet"
+      aria-busy
+      aria-label="Загрузка"
+    >
       <div className="mx-auto mb-10 h-6 w-[38%] max-w-[12rem] rounded-md bg-white/[0.08]" />
       <div className="space-y-4">
         <div className="h-14 rounded-xl bg-white/[0.05]" />

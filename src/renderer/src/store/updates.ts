@@ -1,5 +1,33 @@
 import { create } from 'zustand'
 
+const APP_UPDATE_POSTPONE_KEY = 'knowhub-app-update-install-next-launch'
+
+export function markAppUpdateInstallOnNextLaunch(): void {
+  try {
+    localStorage.setItem(APP_UPDATE_POSTPONE_KEY, '1')
+  } catch {
+    // storage unavailable
+  }
+}
+
+export function consumeAppUpdateInstallOnNextLaunch(): boolean {
+  try {
+    if (localStorage.getItem(APP_UPDATE_POSTPONE_KEY) !== '1') return false
+    localStorage.removeItem(APP_UPDATE_POSTPONE_KEY)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function clearAppUpdateInstallOnNextLaunch(): void {
+  try {
+    localStorage.removeItem(APP_UPDATE_POSTPONE_KEY)
+  } catch {
+    // storage unavailable
+  }
+}
+
 interface UpdatesStore {
   contentUpdated: boolean
   appUpdateAvailable: boolean
@@ -32,6 +60,8 @@ export const useUpdatesStore = create<UpdatesStore>((set) => ({
     set({
       appUpdateAvailable: true,
       appUpdateDismissed: false,
+      appUpdateDownloading: true,
+      appUpdateProgress: 0,
       appUpdateError: null
     }),
   setAppUpdateDownloading: (downloading) =>
@@ -46,6 +76,7 @@ export const useUpdatesStore = create<UpdatesStore>((set) => ({
       appUpdateDownloaded: true,
       appUpdateDownloading: false,
       appUpdateProgress: 100,
+      appUpdateDismissed: false,
       appUpdateError: null
     }),
   setAppUpdateError: (message) =>
@@ -55,7 +86,8 @@ export const useUpdatesStore = create<UpdatesStore>((set) => ({
     })
 }))
 
-export function isAppUpdateBannerVisible(state: UpdatesStore): boolean {
-  if (state.appUpdateDownloaded || state.appUpdateDownloading) return true
-  return state.appUpdateAvailable && !state.appUpdateDismissed
+/** Тост «обновление готово» / ошибка — для стека с другими тостами. */
+export function isAppUpdateToastVisible(state: UpdatesStore): boolean {
+  if (state.appUpdateDismissed) return false
+  return state.appUpdateDownloaded || !!state.appUpdateError
 }

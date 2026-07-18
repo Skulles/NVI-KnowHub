@@ -2,8 +2,9 @@ import React, { useEffect, useLayoutEffect } from 'react'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { ContentArea } from './components/ContentArea/ContentArea'
 import { UpdateBanner } from './components/UpdateBanner/UpdateBanner'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { initContentStore, MIN_INSTRUCTIONS_REFRESH_MS, useContentStore } from './store/content'
-import { useUpdatesStore } from './store/updates'
+import { clearAppUpdateInstallOnNextLaunch, consumeAppUpdateInstallOnNextLaunch, useUpdatesStore } from './store/updates'
 
 export default function App(): React.ReactElement {
   const {
@@ -30,19 +31,26 @@ export default function App(): React.ReactElement {
   useLayoutEffect(() => {
     if (!window.api) return
 
+    let contentRefreshCancelled = false
+    let sawUpdateDownloaded = false
+
     const offContent = window.api.onContentUpdated(() => {
       void (async () => {
         const startedAtMs = Date.now()
         useContentStore.getState().setInstructionsRefresh({ startedAtMs, endMs: null })
         try {
           await initContentStore()
+          if (contentRefreshCancelled) return
           const endMs = Math.max(startedAtMs + MIN_INSTRUCTIONS_REFRESH_MS, Date.now())
           useContentStore.getState().setInstructionsRefresh({ startedAtMs, endMs })
           const waitMs = Math.max(0, endMs - Date.now())
           await new Promise<void>((resolve) => setTimeout(resolve, waitMs))
+          if (contentRefreshCancelled) return
           useUpdatesStore.setState({ contentUpdated: true })
         } finally {
-          useContentStore.getState().setInstructionsRefresh(null)
+          if (!contentRefreshCancelled) {
+            useContentStore.getState().setInstructionsRefresh(null)
+          }
         }
       })()
     })
@@ -56,6 +64,12 @@ export default function App(): React.ReactElement {
     })
 
     const offUpdateDownloaded = window.api.onAppUpdateDownloaded(() => {
+      sawUpdateDownloaded = true
+      // «Отложить» — установить автоматически при следующем запуске, без тоста.
+      if (consumeAppUpdateInstallOnNextLaunch()) {
+        void window.api?.installAppUpdate()
+        return
+      }
       setAppUpdateDownloaded()
     })
 
@@ -63,7 +77,14 @@ export default function App(): React.ReactElement {
       setAppUpdateError(message)
     })
 
+    // Если отложенное обновление уже поставилось при выходе — сбросить флаг.
+    const clearOrphanPostpone = window.setTimeout(() => {
+      if (!sawUpdateDownloaded) clearAppUpdateInstallOnNextLaunch()
+    }, 20_000)
+
     return () => {
+      contentRefreshCancelled = true
+      window.clearTimeout(clearOrphanPostpone)
       offContent()
       offUpdateAvailable()
       offUpdateProgress()
@@ -78,7 +99,9 @@ export default function App(): React.ReactElement {
         <UpdateBanner />
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
           <Sidebar />
-          <ContentArea />
+          <ErrorBoundary fallbackTitle="Ошибка отображения содержимого">
+            <ContentArea />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

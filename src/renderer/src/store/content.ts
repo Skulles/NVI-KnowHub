@@ -154,7 +154,14 @@ export async function initContentStore(): Promise<void> {
   }
 
   if (!manifest) {
-    manifest = MOCK_MANIFEST
+    // Browser/test without Electron: show mock. Packaged/Electron: empty catalog.
+    if (!window.api) {
+      manifest = MOCK_MANIFEST
+    } else {
+      useContentStore.getState().setManifest(null)
+      useContentStore.setState({ selectedItem: null, articleHtml: null, loading: false })
+      return
+    }
   }
 
   const manifestWithTools = withTools(manifest)

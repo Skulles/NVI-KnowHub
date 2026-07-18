@@ -174,7 +174,7 @@ The admin panel writes articles as HTML to `data/content/` (Docker volume); `con
 ### Update server config
 
 Set `KNOWHUB_SERVER_URL` env var (in `.env`, see `.env.example`) for content sync.  
-`electron-builder.yml` publish URL (`https://YOUR_SERVER/releases/`) is used for app auto-updates.
+`electron-builder.js` publish URL (`https://YOUR_SERVER/releases/`) is used for app auto-updates.
 
 ## Key config files
 
@@ -184,7 +184,7 @@ Set `KNOWHUB_SERVER_URL` env var (in `.env`, see `.env.example`) for content syn
 | `tsconfig.node.json` | TS config for main + preload + shared |
 | `tsconfig.web.json` | TS config for renderer + shared |
 | `tailwind.config.js` | Tailwind — content paths for tree-shaking, design token extensions |
-| `package.json` `"build"` | electron-builder config (targets, publish URL) |
+| `electron-builder.js` | electron-builder config (targets, publish URL) |
 | `.env` / `.env.example` | `KNOWHUB_SERVER_URL` for content sync; `WINBOX_DOWNLOAD_VERSION` for winbox:download |
 | `server-stack/docker-compose.yml` | Production server deployment |
 | `server-stack/docker-compose.dev.yml` | Local server development |

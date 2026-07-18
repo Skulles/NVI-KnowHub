@@ -31,15 +31,29 @@ function resolveReleasesUrl() {
   loadDotEnv()
 
   const explicit = process.env.KNOWHUB_RELEASES_URL?.replace(/\/+$/, '')
-  if (explicit) return `${explicit}/`
+  if (explicit) {
+    if (!/^https:\/\//i.test(explicit)) {
+      throw new Error('[electron-builder] KNOWHUB_RELEASES_URL must be an https:// URL')
+    }
+    return `${explicit}/`
+  }
 
   const server = process.env.KNOWHUB_SERVER_URL?.replace(/\/+$/, '')
-  if (server) return `${server}/releases/`
+  if (!server) {
+    throw new Error(
+      '[electron-builder] KNOWHUB_SERVER_URL is required for packaging (set it in .env)'
+    )
+  }
+  if (!/^https:\/\//i.test(server) && !/^http:\/\/localhost(?::\d+)?$/i.test(server)) {
+    throw new Error(
+      '[electron-builder] KNOWHUB_SERVER_URL must be https:// (or http://localhost for local packaging tests)'
+    )
+  }
+  if (/YOUR_SERVER/i.test(server)) {
+    throw new Error('[electron-builder] KNOWHUB_SERVER_URL still contains YOUR_SERVER placeholder')
+  }
 
-  console.warn(
-    '[electron-builder] KNOWHUB_SERVER_URL is not set — publish.url falls back to placeholder'
-  )
-  return 'https://YOUR_SERVER/releases/'
+  return `${server}/releases/`
 }
 
 const releasesUrl = resolveReleasesUrl()
@@ -49,11 +63,21 @@ console.log(`[electron-builder] publish.url → ${releasesUrl}`)
 module.exports = {
   appId: 'com.nvi.knowhub',
   productName: 'NVI KnowHub',
+  copyright: 'Copyright © NVI',
+  asar: true,
   directories: {
     buildResources: 'build'
   },
   files: [
-    'out'
+    'out',
+    // Renderer bundles these; keep them out of asar to shrink the package.
+    '!node_modules/@fontsource-variable/**/*',
+    '!node_modules/react/**/*',
+    '!node_modules/react-dom/**/*',
+    '!node_modules/scheduler/**/*',
+    '!node_modules/zustand/**/*',
+    '!node_modules/dompurify/**/*',
+    '!node_modules/@types/**/*'
   ],
   extraResources: [
     {
@@ -63,30 +87,47 @@ module.exports = {
     {
       from: 'resources/content',
       to: 'content'
-    },
-    {
-      from: 'resources/winbox',
-      to: 'winbox'
     }
   ],
   win: {
     target: 'nsis',
-    // Ярлык и .exe берут иконку из .ico (не из extraResources/icon.png).
-    icon: 'build/icon.ico'
+    icon: 'build/icon.ico',
+    extraResources: [
+      {
+        from: 'resources/winbox',
+        to: 'winbox',
+        filter: ['WinBox64.exe']
+      }
+    ]
   },
   nsis: {
     installerIcon: 'build/icon.ico',
     uninstallerIcon: 'build/icon.ico',
-    // Пересоздавать ярлык при переустановке (иначе остаётся старая иконка Electron).
     createDesktopShortcut: 'always',
     shortcutName: 'NVI KnowHub'
   },
   mac: {
+    category: 'public.app-category.reference',
     // Squirrel.Mac / electron-updater скачивает .zip для in-place update; один .dmg ломает автообновление.
-    target: ['dmg', 'zip']
+    target: ['dmg', 'zip'],
+    extraResources: [
+      {
+        from: 'resources/winbox',
+        to: 'winbox',
+        filter: ['WinBox.app/**']
+      }
+    ]
   },
   linux: {
-    target: 'AppImage'
+    target: 'AppImage',
+    category: 'Education',
+    extraResources: [
+      {
+        from: 'resources/winbox',
+        to: 'winbox',
+        filter: ['WinBox']
+      }
+    ]
   },
   publish: {
     provider: 'generic',

@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { InfoCircleIcon } from '../../components/Icons'
 import {
   type FuelToolFormSnapshot,
   loadFuelToolForm,
@@ -140,6 +142,50 @@ function ResultRow({
         )}
       </dd>
     </div>
+  )
+}
+
+const CARRY_OVER_TOOLTIP =
+  'Одометр и ожидаемый остаток топлива переносятся на начало следующей смены; заправка обнуляется.'
+
+function AnchorTooltip({ text, anchorEl }: { text: string; anchorEl: HTMLElement | null }) {
+  if (!anchorEl) return null
+  const rect = anchorEl.getBoundingClientRect()
+  const x = rect.left + rect.width / 2
+  const top = rect.top - 8
+  return createPortal(
+    <div
+      role="tooltip"
+      style={{ position: 'fixed', left: x, top, transform: 'translate(-50%, -100%)', zIndex: 9999 }}
+      className="pointer-events-none max-w-[240px] whitespace-normal rounded-lg border border-surface-border/80 bg-surface-raised px-2.5 py-1.5 text-[12px] leading-snug text-label-secondary shadow-sheet"
+    >
+      {text}
+      <span
+        aria-hidden
+        className="absolute -bottom-[5px] left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-b border-r border-surface-border/80 bg-surface-raised"
+      />
+    </div>,
+    document.body,
+  )
+}
+
+function InfoTooltip({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [hovered, setHovered] = useState(false)
+
+  return (
+    <span
+      ref={ref}
+      className="relative inline-flex shrink-0 items-center justify-center"
+      aria-label={text}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <InfoCircleIcon className="block h-[15px] w-[15px] text-label-tertiary" />
+      {hovered && <AnchorTooltip text={text} anchorEl={ref.current} />}
+    </span>
   )
 }
 
@@ -308,25 +354,28 @@ export function FuelCalculator() {
           </section>
 
           {/* Перенос на следующую смену */}
-          <div className="flex flex-col gap-3">
+          <div className="mt-3">
             <button
               type="button"
-              disabled={!Number.isFinite(out.endL)}
-              onClick={carryOver}
-              className="w-full bg-tint-blue hover:bg-tint-blue-hover disabled:opacity-35 disabled:cursor-not-allowed text-white font-medium text-[15px] py-3 px-5 rounded-xl transition-all duration-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-card"
+              aria-disabled={!Number.isFinite(out.endL)}
+              onClick={() => {
+                if (Number.isFinite(out.endL)) carryOver()
+              }}
+              className={`w-full rounded-xl border border-surface-border bg-surface-raised/20 px-5 py-3 text-[15px] font-medium text-label-secondary transition-colors duration-200 hover:bg-white/[0.04] hover:text-label-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+                Number.isFinite(out.endL) ? '' : 'cursor-not-allowed opacity-35'
+              }`}
             >
-              Обновить данные для следующей смены
+              <span className="inline-flex items-center justify-center gap-2">
+                <InfoTooltip text={CARRY_OVER_TOOLTIP} />
+                Сохранить показания одометра
+              </span>
             </button>
-            <p className="m-0 text-[13px] text-label-tertiary leading-relaxed">
-              Показание одометра на конец смены переносится на начало смены, расчётный
-              остаток топлива в объём в баке на начало смены.
-            </p>
           </div>
         </div>
       </div>
 
       {/* ── footer note ── */}
-      <aside style={{marginBottom: '60px'}} className="mt-6 rounded-2xl border border-surface-border/80 bg-surface-card/40 px-5 py-4">
+      <aside style={{marginBottom: '60px'}} className="mt-6">
         <p className="m-0 text-[14px] text-label-tertiary leading-relaxed">
           Если фактические показания датчика уровня топлива или бортового компьютера сильно
           отличаются от ожидаемого остатка сделайте соответствующую пометку в путевом листе

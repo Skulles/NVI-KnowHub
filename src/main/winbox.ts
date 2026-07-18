@@ -13,12 +13,13 @@ import {
 } from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, resolve, sep, isAbsolute, relative } from 'path'
 import AdmZip from 'adm-zip'
 import type { IZipEntry } from 'adm-zip'
 import type { WinboxUpdateInfo } from '../shared/api'
 
-function winboxResourcesDir(): string {
+/** Seeded / packaged WinBox directory (read-only when packaged). */
+function winboxBundledDir(): string {
   if (app.isPackaged) {
     return join(process.resourcesPath, 'winbox')
   }
@@ -26,16 +27,55 @@ function winboxResourcesDir(): string {
   return join(__dirname, '../../resources/winbox')
 }
 
-/** Ожидаемое имя артефакта внутри resources/winbox/ для текущей платформы. */
+/** Writable install location — survives updates and avoids elevation on resources/. */
+function winboxUserDir(): string {
+  return join(app.getPath('userData'), 'winbox')
+}
+
+/** Directory used for downloads / installs. */
+function winboxInstallDir(): string {
+  return winboxUserDir()
+}
+
+/** Ожидаемое имя артефакта для текущей платформы. */
 export function getBundledExpectedName(): string {
   if (process.platform === 'win32') return 'WinBox64.exe'
   if (process.platform === 'darwin') return 'WinBox.app'
   return 'WinBox'
 }
 
-/** Путь к бандлу WinBox внутри ресурсов приложения. */
+/** Prefer userData install; fall back to bundled seed. */
 function getBundledPath(): string {
-  return join(winboxResourcesDir(), getBundledExpectedName())
+  const name = getBundledExpectedName()
+  const userPath = join(winboxUserDir(), name)
+  if (existsSync(userPath)) return userPath
+  return join(winboxBundledDir(), name)
+}
+
+function isSafeZipEntryName(entryName: string, destRoot: string): boolean {
+  const normalized = entryName.replace(/\\/g, '/')
+  if (!normalized || normalized.includes('\0')) return false
+  if (normalized.split('/').some((part) => part === '..')) return false
+  const full = resolve(destRoot, normalized)
+  const root = resolve(destRoot)
+  const rel = relative(root, full)
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel) && full.startsWith(root + sep)
+}
+
+function extractZipSafely(zip: AdmZip, destRoot: string): void {
+  mkdirSync(destRoot, { recursive: true })
+  for (const entry of zip.getEntries()) {
+    if (!isSafeZipEntryName(entry.entryName, destRoot)) {
+      throw new Error('BAD_ZIP')
+    }
+    const target = resolve(destRoot, entry.entryName.replace(/\\/g, '/'))
+    if (entry.isDirectory) {
+      mkdirSync(target, { recursive: true })
+      continue
+    }
+    mkdirSync(join(target, '..'), { recursive: true })
+    writeFileSync(target, entry.getData())
+  }
 }
 
 const WINBOX_DOWNLOAD_URL = 'https://mikrotik.com/download/winbox'
@@ -240,7 +280,7 @@ function installWinboxFromZipBuffer(buf: Buffer, destDir: string, destBundledPat
   if (process.platform === 'darwin') {
     const tmp = mkdtempSync(join(tmpdir(), 'kh-wb-'))
     try {
-      zip.extractAllTo(tmp, true)
+      extractZipSafely(zip, tmp)
       const items = readdirSync(tmp)
       const appFolder = items.find((n) => n.endsWith('.app'))
       if (!appFolder) throw new Error('BAD_ZIP')
@@ -280,7 +320,7 @@ function humanDownloadError(err: unknown): string {
   if (!(err instanceof Error)) return 'Не удалось загрузить WinBox.'
   const code = (err as NodeJS.ErrnoException).code
   if (code === 'EACCES' || code === 'EPERM') {
-    return 'Нет прав на запись в папку приложения. Запустите от имени администратора или скачайте WinBox вручную со страницы MikroTik.'
+    return 'Нет прав на запись в данные приложения. Скачайте WinBox вручную со страницы MikroTik.'
   }
   if (err.message === 'NOT_FOUND') {
     return 'На сервере MikroTik не найден архив WinBox для вашей системы. Откройте страницу загрузки и установите вручную.'
@@ -356,8 +396,8 @@ export function setupWinbox(): void {
 
   ipcMain.handle('winbox:download-bundled', async (): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const destDir = winboxResourcesDir()
-      const destPath = getBundledPath()
+      const destDir = winboxInstallDir()
+      const destPath = join(destDir, getBundledExpectedName())
       const artifact = await downloadWinboxArtifactBuffer()
       installWinboxFromArtifact(artifact, destDir, destPath)
       return { ok: true }

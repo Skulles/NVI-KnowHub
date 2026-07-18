@@ -643,7 +643,7 @@ header:has(.article-publish-meta) .app-preview__title {
   height: 1.875rem;
   flex-shrink: 0;
   display: block;
-  align-self: center;
+  align-self: start;
 }
 
 .app-preview .article-body.article-content blockquote.article-callout .article-callout__label {

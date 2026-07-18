@@ -7,25 +7,60 @@ export interface MonitoringObject {
 
 export interface MonitoringSnapshot {
   objects: MonitoringObject[]
-  intervalMs: number
 }
 
-export const MONITORING_INTERVALS = [
-  { label: '1 сек', value: 1000 },
-  { label: '5 сек', value: 5000 },
-  { label: '30 сек', value: 30000 },
-  { label: '1 мин', value: 60000 },
-  { label: '5 мин', value: 300000 }
-] as const
-
-export const DEFAULT_MONITORING_INTERVAL_MS = 5000
+export const MONITORING_REFRESH_INTERVAL_MS = 5000
 
 const STORAGE_KEY = 'monitoring-tool-v1'
 const OBJECT_RE = /^(?:owl)?(\d{2})(\d{2})\/?$/i
 
 const DEFAULT: MonitoringSnapshot = {
-  objects: [],
-  intervalMs: DEFAULT_MONITORING_INTERVAL_MS
+  objects: []
+}
+
+export function isValidIPv4(host: string): boolean {
+  const parts = host.trim().split('.')
+  if (parts.length !== 4) return false
+
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false
+    const value = Number(part)
+    return Number.isInteger(value) && value >= 0 && value <= 255
+  })
+}
+
+export type IPv4Octets = [string, string, string, string]
+
+export function parseIPv4Octets(value: string): IPv4Octets {
+  const parts = value.trim().split('.')
+  return [parts[0] ?? '', parts[1] ?? '', parts[2] ?? '', parts[3] ?? '']
+}
+
+export function joinIPv4Octets(octets: IPv4Octets): string {
+  return octets.join('.')
+}
+
+export function sanitizeIPv4OctetInput(value: string, previous = ''): string {
+  const digits = value.replace(/\D/g, '').slice(0, 3)
+  if (!digits) return ''
+  if (Number(digits) > 255) return previous
+  return digits
+}
+
+export function normalizePastedIPv4(text: string): string | null {
+  const trimmed = text.trim()
+  if (isValidIPv4(trimmed)) return trimmed
+
+  const parts = trimmed.split('.').slice(0, 4)
+  if (!parts.some((part) => part.replace(/\D/g, '').length > 0)) return null
+
+  const octets: IPv4Octets = [0, 1, 2, 3].map((index) => {
+    const digits = (parts[index] ?? '').replace(/\D/g, '').slice(0, 3)
+    if (!digits) return ''
+    return String(Math.min(255, Number(digits)))
+  }) as IPv4Octets
+
+  return joinIPv4Octets(octets)
 }
 
 export function parseMonitoringObject(raw: string): MonitoringObject | null {
@@ -43,14 +78,28 @@ export function parseMonitoringObject(raw: string): MonitoringObject | null {
   }
 }
 
-export function sanitizeMonitoringDigits(value: string): string {
-  return value.replace(/\D/g, '').slice(0, 4)
+export function buildMonitoringObject(
+  digits: string,
+  linkHost: string,
+  serverHost: string
+): MonitoringObject | null {
+  const parsed = parseMonitoringObject(digits)
+  if (!parsed) return null
+  if (!isValidIPv4(linkHost) || !isValidIPv4(serverHost)) return null
+
+  return {
+    ...parsed,
+    linkHost: linkHost.trim(),
+    serverHost: serverHost.trim()
+  }
 }
 
-function normalizeInterval(value: unknown): number {
-  return typeof value === 'number' && MONITORING_INTERVALS.some((interval) => interval.value === value)
-    ? value
-    : DEFAULT_MONITORING_INTERVAL_MS
+export function objectDigits(object: MonitoringObject): string {
+  return object.code.replace(/^owl/i, '').replace(/\//, '')
+}
+
+export function sanitizeMonitoringDigits(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 4)
 }
 
 function normalizeObjects(value: unknown): MonitoringObject[] {
@@ -66,8 +115,17 @@ function normalizeObjects(value: unknown): MonitoringObject[] {
     const parsed = parseMonitoringObject(code)
     if (!parsed || seen.has(parsed.id)) return
 
+    const linkHost =
+      'linkHost' in item && typeof item.linkHost === 'string' && isValidIPv4(item.linkHost)
+        ? item.linkHost.trim()
+        : parsed.linkHost
+    const serverHost =
+      'serverHost' in item && typeof item.serverHost === 'string' && isValidIPv4(item.serverHost)
+        ? item.serverHost.trim()
+        : parsed.serverHost
+
     seen.add(parsed.id)
-    objects.push(parsed)
+    objects.push({ ...parsed, linkHost, serverHost })
   })
 
   return objects
@@ -80,8 +138,7 @@ export function loadMonitoringSnapshot(): MonitoringSnapshot {
 
     const parsed = JSON.parse(raw)
     return {
-      objects: normalizeObjects(parsed?.objects),
-      intervalMs: normalizeInterval(parsed?.intervalMs)
+      objects: normalizeObjects(parsed?.objects)
     }
   } catch {
     return { ...DEFAULT }

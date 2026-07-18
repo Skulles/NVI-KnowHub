@@ -45,7 +45,7 @@ function scrollHeadingIntoView(heading: HTMLElement, scrollRoot: HTMLElement | n
 }
 
 function uniqueHeadingId(baseId: string, index: number, usedIds: Set<string>): string {
-  let candidate = baseId || `section-${index + 1}`
+  const candidate = baseId || `section-${index + 1}`
   if (!usedIds.has(candidate)) {
     usedIds.add(candidate)
     return candidate

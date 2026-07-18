@@ -945,8 +945,6 @@ function buildGrooveaDeviceConfig(options: {
   linkKey: string
 }): string {
   const { role, owlDigits, nameSlug, ssid, hosts, net, newPassword, protocol, band, linkKey } = options
-  const roleIndex = GROOVEA_ROLE_INDEX[role]
-  const lanAddress = { ip: hosts[roleIndex], net }
   const deviceName = buildGrooveaDeviceName(owlDigits, role, nameSlug)
 
   const sections = [
@@ -1774,7 +1772,6 @@ export function WinBox() {
     checkStatus,
     bundled,
     sidebarOpenError,
-    mikrotikOnline,
     bundledExpectedName,
     setChecking,
     setResult,
@@ -1808,10 +1805,12 @@ export function WinBox() {
 
   useEffect(() => {
     if (checkStatus !== 'idle' || !window.api) return
+    let cancelled = false
     setChecking()
     window.api
       .winboxCheckUpdate()
-      .then((info) =>
+      .then((info) => {
+        if (cancelled) return
         setResult({
           bundled: info.bundled,
           hasUpdate: info.hasUpdate,
@@ -1820,9 +1819,14 @@ export function WinBox() {
           mikrotikOnline: info.mikrotikOnline,
           bundledExpectedName: info.bundledExpectedName
         })
-      )
-      .catch(() => setError())
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+      })
+      .catch(() => {
+        if (!cancelled) setError()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [checkStatus, setChecking, setResult, setError])
 
   const handlePrimaryAction = useCallback(async () => {
     if (!window.api) return
@@ -1854,13 +1858,6 @@ export function WinBox() {
       )
     }
   }, [bundled, checkStatus, refreshWinboxInfo, setSidebarOpenError])
-
-  const handleOpenDownloadPage = useCallback(async () => {
-    if (!window.api) return
-    setDownloadError(null)
-    const { ok } = await window.api.winboxOpenDownloadPage()
-    if (!ok) setDownloadError('Не удалось открыть страницу загрузки в браузере.')
-  }, [])
 
   const isChecking = checkStatus === 'checking'
   const disabled = isChecking || launching || downloading

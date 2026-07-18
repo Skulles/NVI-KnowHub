@@ -406,7 +406,7 @@
   }
 
   .article-body.article-content .article-section-card > h2 {
-    @apply m-0 border-b border-surface-border bg-surface-window/95 px-4 py-3 text-[13.5px] font-semibold uppercase tracking-[0.1em] text-label-tertiary;
+    @apply m-0 border-b border-surface-border/50 bg-transparent px-4 py-3 text-[13px] font-medium uppercase tracking-[0.1em] text-label-tertiary/60;
   }
 
   .article-body.article-content .article-section-card ul,
@@ -583,7 +583,7 @@
     height: 1.875rem;
     flex-shrink: 0;
     display: block;
-    align-self: center;
+    align-self: start;
   }
 
   .article-body.article-content blockquote.article-callout .article-callout__label {
@@ -709,4 +709,19 @@
   100% {
     background-position: -80% 0, 0 0;
   }
+}
+
+@keyframes knowhub-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.knowhub-spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  border: 2px solid rgba(139, 149, 176, 0.28);
+  border-top-color: #7c8cff;
+  animation: knowhub-spin 0.75s linear infinite;
 }
