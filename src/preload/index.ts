@@ -49,11 +49,19 @@ const api: ElectronAPI = {
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
 
   winboxOpen: () => ipcRenderer.invoke('winbox:open'),
+  winboxGetLocalStatus: () => ipcRenderer.invoke('winbox:get-local-status'),
   winboxCheckUpdate: () => ipcRenderer.invoke('winbox:check-update'),
   winboxDownloadBundled: () => ipcRenderer.invoke('winbox:download-bundled'),
   winboxOpenDownloadPage: () => ipcRenderer.invoke('winbox:open-download-page'),
 
-  monitoringPing: (targets) => ipcRenderer.invoke('monitoring:ping', targets)
+  monitoringPing: (targets) => ipcRenderer.invoke('monitoring:ping', targets),
+  monitoringHttpProbe: (targets) => ipcRenderer.invoke('monitoring:http-probe', targets),
+  monitoringFetchVersion: (request) => ipcRenderer.invoke('monitoring:fetch-version', request),
+  monitoringFetchStreams: (request) => ipcRenderer.invoke('monitoring:fetch-streams', request),
+  monitoringPreviewCameras: (request) => ipcRenderer.invoke('monitoring:preview-cameras', request),
+  monitoringFetchMegaphones: (request) => ipcRenderer.invoke('monitoring:fetch-megaphones', request),
+  monitoringFetchMegaphoneStatuses: (request) =>
+    ipcRenderer.invoke('monitoring:fetch-megaphone-statuses', request)
 }
 
 contextBridge.exposeInMainWorld('api', api)

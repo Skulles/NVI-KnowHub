@@ -7,6 +7,8 @@ type CheckStatus = 'idle' | 'checking' | 'done' | 'error'
 
 interface WinboxStore {
   checkStatus: CheckStatus
+  /** Локальный exe/app уже проверен (без сети). */
+  localReady: boolean
   bundled: boolean
   hasUpdate: boolean
   latestVersion: string
@@ -17,6 +19,7 @@ interface WinboxStore {
   /** После ошибки запуска из сайдбара (очищается при смене пункта / повторной попытке) */
   sidebarOpenError: string | null
   setChecking: () => void
+  setLocalStatus: (info: { bundled: boolean; bundledExpectedName: string }) => void
   setResult: (info: {
     bundled: boolean
     hasUpdate: boolean
@@ -32,6 +35,7 @@ interface WinboxStore {
 
 export const useWinboxStore = create<WinboxStore>((set) => ({
   checkStatus: 'idle',
+  localReady: false,
   bundled: false,
   hasUpdate: false,
   latestVersion: '',
@@ -42,9 +46,16 @@ export const useWinboxStore = create<WinboxStore>((set) => ({
   sidebarOpenError: null,
 
   setChecking: () => set({ checkStatus: 'checking' }),
+  setLocalStatus: ({ bundled, bundledExpectedName }) =>
+    set({
+      localReady: true,
+      bundled,
+      bundledExpectedName
+    }),
   setResult: ({ bundled, hasUpdate, latest, local, mikrotikOnline, bundledExpectedName }) =>
     set({
       checkStatus: 'done',
+      localReady: true,
       bundled,
       hasUpdate,
       latestVersion: latest,

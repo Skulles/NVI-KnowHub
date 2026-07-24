@@ -7,8 +7,25 @@ import groovea52AcImage from '../../assets/devices/mikrotik-groovea-52-ac.png'
 import metal52AcImage from '../../assets/devices/mikrotik-metal-52-ac.png'
 import mantboxAxImage from '../../assets/devices/mikrotik-mANTBox-ax.png'
 import wirelessWireNrayImage from '../../assets/devices/mikrotik-Wireless-Wire-nRAY.png'
+import {
+  downloadTextFile,
+  formatConfigSavedAt,
+  getSavedConfigHeaderText,
+  getSavedConfigPreviewText,
+  getSavedConfigRoleLabels,
+  getSavedConfigRoles,
+  groupConfigsByOwlId,
+  loadWinboxConfigs,
+  removeSavedConfig,
+  savedConfigHasRoleTabs,
+  saveWinboxConfigs,
+  upsertSavedConfig,
+  type SavedConfigRole,
+  type SavedMikrotikConfig,
+} from './winboxConfigStorage'
 
 type ConfigDeviceFlow = 'lte-ipsec' | 'groovea'
+type WirelessStack = 'legacy' | 'wifi'
 
 const MIKROTIK_CONFIG_DEVICES = [
   {
@@ -17,6 +34,7 @@ const MIKROTIK_CONFIG_DEVICES = [
     image: ltapMiniLteKitImage,
     flow: 'lte-ipsec' as const,
     nameSlug: '',
+    wirelessStack: 'legacy' as const,
     disabled: false,
   },
   {
@@ -25,6 +43,7 @@ const MIKROTIK_CONFIG_DEVICES = [
     image: groovea52AcImage,
     flow: 'groovea' as const,
     nameSlug: 'GrooveA52',
+    wirelessStack: 'legacy' as const,
     disabled: false,
   },
   {
@@ -33,22 +52,25 @@ const MIKROTIK_CONFIG_DEVICES = [
     image: metal52AcImage,
     flow: 'groovea' as const,
     nameSlug: 'Metal52',
+    wirelessStack: 'legacy' as const,
     disabled: false,
   },
   {
     id: 'mantbox-ax-15s',
+    label: 'mANTBox ax 15s',
+    image: mantboxAxImage,
+    flow: 'groovea' as const,
+    nameSlug: 'mANTBoxAx15s',
+    wirelessStack: 'wifi' as const,
+    disabled: false,
+  },
+  {
+    id: 'wireless-wire-nray',
     label: 'Wireless Wire nRAY',
     image: wirelessWireNrayImage,
     flow: 'groovea' as const,
     nameSlug: '',
-    disabled: true,
-  },
-  {
-    id: 'wireless-wire-nray',
-    label: 'mANTBox ax 15s',
-    image: mantboxAxImage,
-    flow: 'groovea' as const,
-    nameSlug: '',
+    wirelessStack: 'legacy' as const,
     disabled: true,
   },
 ] as const
@@ -59,6 +81,10 @@ function getDeviceFlow(deviceId: string): ConfigDeviceFlow {
 
 function getDeviceNameSlug(deviceId: string): string {
   return MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.nameSlug ?? ''
+}
+
+function getDeviceWirelessStack(deviceId: string): WirelessStack {
+  return MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.wirelessStack ?? 'legacy'
 }
 
 function preloadDeviceImages(): void {
@@ -85,6 +111,7 @@ function buildOwlDeviceName(owlDigits: string): string {
 type GrooveaRole = 'ap' | 'station1' | 'station2'
 
 const GROOVEA_ROLES: readonly GrooveaRole[] = ['ap', 'station1', 'station2']
+const WIFI_LINK_ROLES: readonly GrooveaRole[] = ['ap', 'station1']
 
 const GROOVEA_ROLE_LABELS: Record<GrooveaRole, string> = {
   ap: 'AP',
@@ -92,40 +119,83 @@ const GROOVEA_ROLE_LABELS: Record<GrooveaRole, string> = {
   station2: 'Station 2',
 }
 
+const WIFI_LINK_ROLE_LABELS: Partial<Record<GrooveaRole, string>> = {
+  ap: 'AP',
+  station1: 'Station',
+}
+
 const GROOVEA_ROLE_INDEX: Record<GrooveaRole, number> = { ap: 0, station1: 1, station2: 2 }
 
-function buildGrooveaDeviceName(owlDigits: string, role: GrooveaRole, nameSlug: string): string {
-  const suffix = role === 'ap' ? 'ap' : role === 'station1' ? 'station1' : 'station2'
-  return `owl${owlDigits}-${nameSlug}-${suffix}`
+function getLinkRoles(wirelessStack: WirelessStack): readonly GrooveaRole[] {
+  return wirelessStack === 'wifi' ? WIFI_LINK_ROLES : GROOVEA_ROLES
+}
+
+function getLinkRoleLabels(wirelessStack: WirelessStack): Partial<Record<GrooveaRole, string>> {
+  return wirelessStack === 'wifi' ? WIFI_LINK_ROLE_LABELS : GROOVEA_ROLE_LABELS
+}
+
+function buildGrooveaDeviceName(
+  owlDigits: string,
+  role: GrooveaRole,
+  nameSlug: string,
+  wirelessStack: WirelessStack = 'legacy',
+): string {
+  if (role === 'ap') return `owl${owlDigits}-${nameSlug}-ap`
+  if (wirelessStack === 'wifi' || role === 'station1') {
+    return wirelessStack === 'wifi'
+      ? `owl${owlDigits}-${nameSlug}-station`
+      : `owl${owlDigits}-${nameSlug}-station1`
+  }
+  return `owl${owlDigits}-${nameSlug}-station2`
 }
 
 function buildGrooveaSsid(owlDigits: string, nameSlug: string): string {
   return `owl${owlDigits}-${nameSlug}`
 }
 
-const GROOVEA_DEFAULT_PASSWORD = 'TaburetkaOgurec_41'
+const GROOVEA_DEFAULT_PASSWORD = 'TaburetkaOgurec'
 const GROOVEA_HOST_SUFFIXES = [210, 211, 212] as const
 const GROOVEA_HOST_LABELS = ['AP', 'Station 1', 'Station 2'] as const
+const WIFI_LINK_HOST_SUFFIXES = [210, 211] as const
+const WIFI_LINK_HOST_LABELS = ['AP', 'Station'] as const
+
+function getLinkHostSuffixes(wirelessStack: WirelessStack): readonly number[] {
+  return wirelessStack === 'wifi' ? WIFI_LINK_HOST_SUFFIXES : GROOVEA_HOST_SUFFIXES
+}
+
+function getLinkHostLabels(wirelessStack: WirelessStack): readonly string[] {
+  return wirelessStack === 'wifi' ? WIFI_LINK_HOST_LABELS : GROOVEA_HOST_LABELS
+}
 
 function owlDigitsToGrooveaPrefix(digits: string): [string, string, string] | null {
   if (!/^\d{4}$/.test(digits)) return null
   return ['10', digits.slice(0, 2), digits.slice(2, 4)]
 }
 
-function grooveaPrefixToAddresses(prefix: [string, string, string]): {
+function grooveaPrefixToAddresses(
+  prefix: [string, string, string],
+  hostSuffixes: readonly (string | number)[],
+): {
   ip: string
   net: string
   hosts: string[]
 } | null {
   if (prefix.some((o) => o.trim() === '')) return null
+  if (hostSuffixes.some((o) => String(o).trim() === '')) return null
   const nums = prefix.map((o) => parseInt(o, 10))
   if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null
+  const suffixes = hostSuffixes.map((o) => parseInt(String(o), 10))
+  if (suffixes.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null
   const base = nums.join('.')
   return {
-    ip: `${base}.${GROOVEA_HOST_SUFFIXES[0]}`,
+    ip: `${base}.${suffixes[0]}`,
     net: `${base}.0`,
-    hosts: GROOVEA_HOST_SUFFIXES.map((suffix) => `${base}.${suffix}`),
+    hosts: suffixes.map((suffix) => `${base}.${suffix}`),
   }
+}
+
+function defaultLinkHostSuffixStrings(wirelessStack: WirelessStack): string[] {
+  return getLinkHostSuffixes(wirelessStack).map(String)
 }
 
 type GrooveaWirelessProtocol = 'nv2' | '802.11'
@@ -135,6 +205,35 @@ function grooveaBandToRouterOs(band: GrooveaWirelessBand): string {
   return band === '2.4 ГГц' ? '2ghz-b/g/n' : '5ghz-a/n/ac'
 }
 
+/** Fixed channel: outdoor-safe for Russia antennas, no DFS CAC wait. */
+function linkChannelSettings(band: GrooveaWirelessBand): {
+  frequency: number
+  legacyBand: string
+  wifiBand: string
+} {
+  if (band === '2.4 ГГц') {
+    return {
+      frequency: 2412,
+      legacyBand: '2ghz-b/g/n',
+      wifiBand: '2ghz-ax',
+    }
+  }
+  // 5765 (ch 153) — в outdoor-диапазоне russia (5755–5815), без DFS
+  return {
+    frequency: 5765,
+    legacyBand: '5ghz-a/n/ac',
+    wifiBand: '5ghz-ax',
+  }
+}
+
+function buildCredentialsSummary(owlDigits: string, adminPassword: string): string {
+  return [
+    `OWLGUARD ID: ${owlDigits}`,
+    `Логин: admin`,
+    `Пароль: ${adminPassword}`,
+  ].join('\n')
+}
+
 function buildGrooveaConfigHeader(
   owlDigits: string,
   hosts: string[],
@@ -142,16 +241,21 @@ function buildGrooveaConfigHeader(
   wirelessProtocol: GrooveaWirelessProtocol,
   wirelessBand: GrooveaWirelessBand | undefined,
   linkKey: string,
+  wirelessStack: WirelessStack = 'legacy',
 ): string {
+  const roleLabels = getLinkRoleLabels(wirelessStack)
+  const roles = getLinkRoles(wirelessStack)
   const lines = [
     `OWLGUARD ID: ${owlDigits}`,
-    `AP: ${hosts[0]}/24`,
-    `Station 1: ${hosts[1]}/24`,
-    `Station 2: ${hosts[2]}/24`,
-    `Протокол: ${wirelessProtocol}`,
+    ...roles.map((role, index) => `${roleLabels[role] ?? role}: ${hosts[index]}/24`),
   ]
-  if (wirelessProtocol === '802.11' && wirelessBand) {
-    lines.push(`Диапазон: ${wirelessBand}`)
+  if (wirelessStack === 'wifi') {
+    if (wirelessBand) lines.push(`Диапазон: ${wirelessBand}`)
+  } else {
+    lines.push(`Протокол: ${wirelessProtocol}`)
+    if (wirelessProtocol === '802.11' && wirelessBand) {
+      lines.push(`Диапазон: ${wirelessBand}`)
+    }
   }
   lines.push(`Пароль: ${linkKey}`, `Логин: admin`, `Пароль администратора: ${mikrotikPassword}`)
   return lines.join('\n')
@@ -431,16 +535,33 @@ const WIRELESS_BAND_TOOLTIPS: Partial<Record<GrooveaWirelessBand, string>> = {
 }
 
 function GrooveaWirelessSettings({
+  wirelessStack,
   protocol,
   band,
   onProtocolChange,
   onBandChange,
 }: {
+  wirelessStack: WirelessStack
   protocol: GrooveaWirelessProtocol
   band: GrooveaWirelessBand
   onProtocolChange: (value: GrooveaWirelessProtocol) => void
   onBandChange: (value: GrooveaWirelessBand) => void
 }) {
+  if (wirelessStack === 'wifi') {
+    return (
+      <div className="flex items-center gap-3">
+        <FieldLabel>Диапазон</FieldLabel>
+        <SegmentToggle
+          value={band}
+          onChange={onBandChange}
+          options={['2.4 ГГц', '5 ГГц']}
+          tooltips={WIRELESS_BAND_TOOLTIPS}
+          ariaLabel="Диапазон беспроводной связи"
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center gap-3">
       <FieldLabel>Протокол</FieldLabel>
@@ -895,6 +1016,37 @@ function buildPreviewConfig(options: {
   return sections.filter(Boolean).join('\n\n')
 }
 
+function buildMantboxAxLanBlock(options: {
+  role: GrooveaRole
+  hosts: string[]
+  net: string
+  band: GrooveaWirelessBand
+  ssid: string
+  linkKey: string
+}): string[] {
+  const { role, hosts, net, band, ssid, linkKey } = options
+  const roleIndex = GROOVEA_ROLE_INDEX[role]
+  const ipAddr = hosts[roleIndex]
+  const is5g = band === '5 ГГц'
+  // mANTBox ax 15s factory defconf: wifi1 = 2.4 GHz, wifi2 = 5 GHz
+  const wifiIface = is5g ? 'wifi2' : 'wifi1'
+  const unusedIface = is5g ? 'wifi1' : 'wifi2'
+  const antennaGain = is5g ? 15 : 12
+  const { frequency, wifiBand } = linkChannelSettings(band)
+  const mode = role === 'ap' ? 'ap' : 'station-bridge'
+  const escapedSsid = escapeRouterOsString(ssid)
+  const escapedKey = escapeRouterOsString(linkKey)
+
+  return [
+    `/interface bridge add name=bridge-lan`,
+    `/interface bridge port add bridge=bridge-lan interface=ether1`,
+    `/interface bridge port add bridge=bridge-lan interface=${wifiIface}`,
+    `/interface wifi set [find default-name=${wifiIface}] disabled=no configuration.mode=${mode} configuration.ssid="${escapedSsid}" configuration.country=Russia configuration.installation=outdoor configuration.antenna-gain=${antennaGain} security.authentication-types=wpa2-psk security.passphrase="${escapedKey}" channel.band=${wifiBand} channel.frequency=${frequency} channel.width=20mhz channel.skip-dfs-channels=all`,
+    `/interface wifi set [find default-name=${unusedIface}] disabled=yes`,
+    `/ip address add address=${ipAddr}/24 network=${net} interface=bridge-lan`,
+  ]
+}
+
 function buildGrooveaLanBlock(options: {
   role: GrooveaRole
   hosts: string[]
@@ -903,13 +1055,20 @@ function buildGrooveaLanBlock(options: {
   band: GrooveaWirelessBand
   ssid: string
   linkKey: string
+  wirelessStack?: WirelessStack
 }): string[] {
-  const { role, hosts, net, protocol, band, ssid, linkKey } = options
+  const { role, hosts, net, protocol, band, ssid, linkKey, wirelessStack = 'legacy' } = options
+  if (wirelessStack === 'wifi') {
+    return buildMantboxAxLanBlock({ role, hosts, net, band, ssid, linkKey })
+  }
+
   const roleIndex = GROOVEA_ROLE_INDEX[role]
   const ipAddr = hosts[roleIndex]
   const mode = role === 'ap' ? 'ap-bridge' : 'station'
   const escapedSsid = escapeRouterOsString(ssid)
   const escapedKey = escapeRouterOsString(linkKey)
+  const { frequency, legacyBand } = linkChannelSettings(band)
+  const bandName = protocol === 'nv2' ? legacyBand : grooveaBandToRouterOs(band)
 
   const lines: string[] = [
     `/interface bridge add name=bridge-lan`,
@@ -918,13 +1077,24 @@ function buildGrooveaLanBlock(options: {
   ]
 
   if (protocol === 'nv2') {
+    if (role === 'ap') {
+      lines.push(
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia installation=outdoor`,
+      )
+    } else {
+      lines.push(
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia installation=outdoor`,
+      )
+    }
+  } else if (role === 'ap') {
     lines.push(
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=${mode} wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8`,
+      `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia installation=outdoor`,
     )
   } else {
     lines.push(
       `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=${mode} wireless-protocol=802.11 band=${grooveaBandToRouterOs(band)} ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia installation=outdoor`,
     )
   }
 
@@ -943,13 +1113,36 @@ function buildGrooveaDeviceConfig(options: {
   protocol: GrooveaWirelessProtocol
   band: GrooveaWirelessBand
   linkKey: string
+  wirelessStack?: WirelessStack
 }): string {
-  const { role, owlDigits, nameSlug, ssid, hosts, net, newPassword, protocol, band, linkKey } = options
-  const deviceName = buildGrooveaDeviceName(owlDigits, role, nameSlug)
+  const {
+    role,
+    owlDigits,
+    nameSlug,
+    ssid,
+    hosts,
+    net,
+    newPassword,
+    protocol,
+    band,
+    linkKey,
+    wirelessStack = 'legacy',
+  } = options
+  const deviceName = buildGrooveaDeviceName(owlDigits, role, nameSlug, wirelessStack)
 
   const sections = [
-    buildGrooveaLanBlock({ role, hosts, net, protocol, band, ssid, linkKey }).join('\n'),
+    buildGrooveaLanBlock({
+      role,
+      hosts,
+      net,
+      protocol,
+      band,
+      ssid,
+      linkKey,
+      wirelessStack,
+    }).join('\n'),
     [
+      `/tool romon set enabled=yes`,
       deviceName.trim() ? `/system identity set name="${deviceName.trim()}"` : '',
       newPassword ? `/user set admin password=${newPassword}` : '',
       newPassword ? buildPassThroughCommand() : '',
@@ -971,22 +1164,30 @@ function buildGrooveaAllConfigs(options: {
   protocol: GrooveaWirelessProtocol
   band: GrooveaWirelessBand
   linkKey: string
-}): Record<GrooveaRole, string> {
+  wirelessStack?: WirelessStack
+}): Partial<Record<GrooveaRole, string>> {
+  const wirelessStack = options.wirelessStack ?? 'legacy'
+  const roles = getLinkRoles(wirelessStack)
   return Object.fromEntries(
-    GROOVEA_ROLES.map((role) => [role, buildGrooveaDeviceConfig({ role, ...options })]),
-  ) as Record<GrooveaRole, string>
+    roles.map((role) => [role, buildGrooveaDeviceConfig({ role, ...options, wirelessStack })]),
+  )
 }
 
 function buildGrooveaSaveTxt(
   header: string,
-  configs: Record<GrooveaRole, string>,
-  deviceNames: Record<GrooveaRole, string>,
+  configs: Partial<Record<GrooveaRole, string>>,
+  deviceNames: Partial<Record<GrooveaRole, string>>,
+  wirelessStack: WirelessStack = 'legacy',
 ): string {
   const sep = '='.repeat(48)
-  const blocks = GROOVEA_ROLES.map(
-    (role) =>
-      `=== ${GROOVEA_ROLE_LABELS[role]}: ${deviceNames[role]} ===\n\n${configs[role]}`,
-  )
+  const roles = getLinkRoles(wirelessStack)
+  const labels = getLinkRoleLabels(wirelessStack)
+  const blocks = roles
+    .filter((role) => configs[role])
+    .map(
+      (role) =>
+        `=== ${labels[role] ?? role}: ${deviceNames[role] ?? role} ===\n\n${configs[role]}`,
+    )
   return [header, sep, ...blocks].join('\n\n')
 }
 
@@ -1002,6 +1203,9 @@ function MikrotikConfigGenerator() {
   const [owlDigits, setOwlDigits] = useState('')
   const [ipOctets, setIpOctets] = useState<[string, string, string, string]>(['10', '0', '0', '1'])
   const [grooveaPrefixOctets, setGrooveaPrefixOctets] = useState<[string, string, string]>(['10', '0', '0'])
+  const [linkHostSuffixesState, setLinkHostSuffixesState] = useState<string[]>(() =>
+    defaultLinkHostSuffixStrings('legacy'),
+  )
   const [grooveaWirelessProtocol, setGrooveaWirelessProtocol] = useState<GrooveaWirelessProtocol>('nv2')
   const [grooveaWirelessBand, setGrooveaWirelessBand] = useState<GrooveaWirelessBand>('5 ГГц')
   const [linkKey, setLinkKey] = useState('')
@@ -1015,11 +1219,15 @@ function MikrotikConfigGenerator() {
   const [wifiHidden, setWifiHidden] = useState(false)
   const [step, setStep] = useState<'input' | 'settings' | 'preview'>('input')
   const [copied, setCopied] = useState(false)
+  const [savedConfigs, setSavedConfigs] = useState<SavedMikrotikConfig[]>(() => loadWinboxConfigs().configs)
+  const [copiedConfigId, setCopiedConfigId] = useState<string | null>(null)
+  const [viewingConfig, setViewingConfig] = useState<SavedMikrotikConfig | null>(null)
+  const [viewingPreviewRole, setViewingPreviewRole] = useState<SavedConfigRole>('ap')
   const ipInputRefs = useMemo(() => Array.from({ length: 4 }, () => ({ current: null as HTMLInputElement | null })), [])
   const grooveaIpInputRefs = useMemo(
     () =>
       GROOVEA_HOST_LABELS.map(() =>
-        Array.from({ length: 3 }, () => ({ current: null as HTMLInputElement | null })),
+        Array.from({ length: 4 }, () => ({ current: null as HTMLInputElement | null })),
       ),
     [],
   )
@@ -1027,12 +1235,27 @@ function MikrotikConfigGenerator() {
   const suggestedFromScript = useMemo(() => parseOwlKeyFromScript(primaryScript), [primaryScript])
   const deviceFlow = getDeviceFlow(deviceId)
   const deviceNameSlug = getDeviceNameSlug(deviceId)
+  const deviceWirelessStack = getDeviceWirelessStack(deviceId)
   const isGroovea = deviceFlow === 'groovea'
+  const isWifiStack = deviceWirelessStack === 'wifi'
   const deviceName = /^\d{4}$/.test(owlDigits) ? buildOwlDeviceName(owlDigits) : ''
   const lanAddressFromOwl = useMemo(() => owlDigitsToLanAddress(owlDigits), [owlDigits])
+  const linkRoles = useMemo(() => getLinkRoles(deviceWirelessStack), [deviceWirelessStack])
+  const linkRoleLabels = useMemo(
+    () => getLinkRoleLabels(deviceWirelessStack),
+    [deviceWirelessStack],
+  )
+  const linkHostLabels = useMemo(
+    () => getLinkHostLabels(deviceWirelessStack),
+    [deviceWirelessStack],
+  )
   const grooveaAddresses = useMemo(
-    () => grooveaPrefixToAddresses(grooveaPrefixOctets),
-    [grooveaPrefixOctets],
+    () =>
+      grooveaPrefixToAddresses(
+        grooveaPrefixOctets,
+        linkHostSuffixesState.slice(0, linkHostLabels.length),
+      ),
+    [grooveaPrefixOctets, linkHostSuffixesState, linkHostLabels.length],
   )
   const lanAddress = useMemo(() => {
     if (isGroovea) {
@@ -1069,8 +1292,9 @@ function MikrotikConfigGenerator() {
         grooveaAddresses.hosts,
         newPassword.trim(),
         grooveaWirelessProtocol,
-        grooveaWirelessProtocol === '802.11' ? grooveaWirelessBand : undefined,
+        isWifiStack || grooveaWirelessProtocol === '802.11' ? grooveaWirelessBand : undefined,
         linkKey.trim(),
+        deviceWirelessStack,
       )
     }
     if (!lanAddress) return ''
@@ -1079,7 +1303,26 @@ function MikrotikConfigGenerator() {
         ? { ssid: wifiSsid.trim(), password: wifiPassword.trim() }
         : undefined
     return buildConfigHeader(owlDigits, lanAddress, newPassword.trim(), wifi)
-  }, [owlDigits, lanAddress, newPassword, wifiEnabled, wifiSsid, wifiPassword, isGroovea, grooveaAddresses, grooveaWirelessProtocol, grooveaWirelessBand, linkKey])
+  }, [
+    owlDigits,
+    lanAddress,
+    newPassword,
+    wifiEnabled,
+    wifiSsid,
+    wifiPassword,
+    isGroovea,
+    isWifiStack,
+    grooveaAddresses,
+    grooveaWirelessProtocol,
+    grooveaWirelessBand,
+    linkKey,
+    deviceWirelessStack,
+  ])
+
+  const credentialsSummaryText = useMemo(() => {
+    if (!/^\d{4}$/.test(owlDigits) || !newPassword.trim()) return ''
+    return buildCredentialsSummary(owlDigits, newPassword.trim())
+  }, [owlDigits, newPassword])
 
   const previewText = useMemo(() => {
     if (isGroovea) {
@@ -1095,6 +1338,7 @@ function MikrotikConfigGenerator() {
         protocol: grooveaWirelessProtocol,
         band: grooveaWirelessBand,
         linkKey,
+        wirelessStack: deviceWirelessStack,
       })
     }
     if (!lanAddress) return ''
@@ -1108,7 +1352,26 @@ function MikrotikConfigGenerator() {
       newPassword,
       deviceName,
     })
-  }, [primaryScript, lanAddress, newPassword, deviceName, wifiEnabled, wifiSsid, wifiPassword, wifiHidden, isGroovea, grooveaWirelessProtocol, grooveaWirelessBand, grooveaAddresses, owlDigits, previewRole, linkKey, grooveaSsid, deviceNameSlug])
+  }, [
+    primaryScript,
+    lanAddress,
+    newPassword,
+    deviceName,
+    wifiEnabled,
+    wifiSsid,
+    wifiPassword,
+    wifiHidden,
+    isGroovea,
+    grooveaWirelessProtocol,
+    grooveaWirelessBand,
+    grooveaAddresses,
+    owlDigits,
+    previewRole,
+    linkKey,
+    grooveaSsid,
+    deviceNameSlug,
+    deviceWirelessStack,
+  ])
 
   const isValidIp = isGroovea ? grooveaAddresses !== null : lanAddress !== null
   const canConfirmSettings =
@@ -1173,6 +1436,20 @@ function MikrotikConfigGenerator() {
     }
   }, [previewText])
 
+  const deviceLabel =
+    MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.label ?? deviceId
+
+  const persistSavedConfig = useCallback(
+    (entry: Omit<SavedMikrotikConfig, 'id' | 'createdAt' | 'updatedAt'>) => {
+      setSavedConfigs((prev) => {
+        const next = upsertSavedConfig(prev, entry)
+        saveWinboxConfigs({ configs: next })
+        return next
+      })
+    },
+    [],
+  )
+
   const handleSave = useCallback(() => {
     if (isGroovea) {
       if (!configHeaderText || !grooveaAddresses || !/^\d{4}$/.test(owlDigits) || !linkKey.trim()) return
@@ -1186,18 +1463,32 @@ function MikrotikConfigGenerator() {
         protocol: grooveaWirelessProtocol,
         band: grooveaWirelessBand,
         linkKey,
+        wirelessStack: deviceWirelessStack,
       })
       const deviceNames = Object.fromEntries(
-        GROOVEA_ROLES.map((role) => [role, buildGrooveaDeviceName(owlDigits, role, deviceNameSlug)]),
-      ) as Record<GrooveaRole, string>
-      const content = buildGrooveaSaveTxt(configHeaderText, configs, deviceNames)
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `owl${owlDigits}-${deviceNameSlug}-config.txt`
-      link.click()
-      URL.revokeObjectURL(url)
+        linkRoles.map((role) => [
+          role,
+          buildGrooveaDeviceName(owlDigits, role, deviceNameSlug, deviceWirelessStack),
+        ]),
+      ) as Partial<Record<GrooveaRole, string>>
+      const content = buildGrooveaSaveTxt(
+        configHeaderText,
+        configs,
+        deviceNames,
+        deviceWirelessStack,
+      )
+      const fileName = `owl${owlDigits}-${deviceNameSlug}-config.txt`
+      downloadTextFile(fileName, content)
+      persistSavedConfig({
+        owlDigits,
+        deviceId,
+        deviceLabel,
+        fileName,
+        content,
+        flow: 'groovea',
+        headerText: credentialsSummaryText,
+        roleConfigs: configs,
+      })
       return
     }
     if (!previewText || !configHeaderText || !lanAddress || !/^\d{4}$/.test(owlDigits)) return
@@ -1206,24 +1497,104 @@ function MikrotikConfigGenerator() {
       previewText,
       CONFIG_FOOTER_NOTE,
     )
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${buildOwlDeviceName(owlDigits)}-config.txt`
-    link.click()
-    URL.revokeObjectURL(url)
-  }, [previewText, configHeaderText, lanAddress, owlDigits, isGroovea, grooveaAddresses, newPassword, grooveaWirelessProtocol, grooveaWirelessBand, linkKey, grooveaSsid, deviceNameSlug])
+    const fileName = `${buildOwlDeviceName(owlDigits)}-config.txt`
+    downloadTextFile(fileName, content)
+    persistSavedConfig({
+      owlDigits,
+      deviceId,
+      deviceLabel,
+      fileName,
+      content,
+      flow: 'lte-ipsec',
+      headerText: credentialsSummaryText,
+      previewCommands: previewText,
+    })
+  }, [
+    previewText,
+    configHeaderText,
+    credentialsSummaryText,
+    lanAddress,
+    owlDigits,
+    isGroovea,
+    grooveaAddresses,
+    newPassword,
+    grooveaWirelessProtocol,
+    grooveaWirelessBand,
+    linkKey,
+    grooveaSsid,
+    deviceNameSlug,
+    deviceWirelessStack,
+    linkRoles,
+    deviceId,
+    deviceLabel,
+    persistSavedConfig,
+  ])
 
-  const deviceLabel =
-    MIKROTIK_CONFIG_DEVICES.find((d) => d.id === deviceId)?.label ?? deviceId
+  const handleDeleteSavedConfig = useCallback((id: string) => {
+    setSavedConfigs((prev) => {
+      const next = removeSavedConfig(prev, id)
+      saveWinboxConfigs({ configs: next })
+      return next
+    })
+    setViewingConfig((current) => (current?.id === id ? null : current))
+    setCopiedConfigId((current) => (current === id ? null : current))
+  }, [])
 
+  const handleDownloadSavedConfig = useCallback((config: SavedMikrotikConfig) => {
+    downloadTextFile(config.fileName, config.content)
+  }, [])
+
+  const handleCopySavedConfigPreview = useCallback(async (text: string, configId: string) => {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedConfigId(configId)
+      window.setTimeout(() => {
+        setCopiedConfigId((current) => (current === configId ? null : current))
+      }, 2000)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const closeViewingConfig = useCallback(() => {
+    setViewingConfig(null)
+    setCopiedConfigId(null)
+    setViewingPreviewRole('ap')
+  }, [])
+
+  const openSavedConfig = useCallback((config: SavedMikrotikConfig) => {
+    setCopiedConfigId(null)
+    setViewingPreviewRole('ap')
+    setViewingConfig(config)
+  }, [])
+
+  const groupedSavedConfigs = useMemo(() => groupConfigsByOwlId(savedConfigs), [savedConfigs])
+  const viewingDevice = viewingConfig
+    ? MIKROTIK_CONFIG_DEVICES.find((d) => d.id === viewingConfig.deviceId)
+    : undefined
+  const viewingHasTabs = viewingConfig ? savedConfigHasRoleTabs(viewingConfig) : false
+  const viewingRoles = useMemo(
+    () => (viewingConfig ? getSavedConfigRoles(viewingConfig) : []),
+    [viewingConfig],
+  )
+  const viewingRoleLabels = useMemo(
+    () => getSavedConfigRoleLabels(viewingRoles),
+    [viewingRoles],
+  )
+  const viewingHeaderText = viewingConfig ? getSavedConfigHeaderText(viewingConfig) : ''
+  const viewingPreviewText = viewingConfig
+    ? getSavedConfigPreviewText(viewingConfig, viewingPreviewRole)
+    : ''
+  const viewingCopied = viewingConfig != null && copiedConfigId === viewingConfig.id
+  const anyModalOpen = modalOpen || viewingConfig != null
   const resetGeneratorState = useCallback((initialStep: 'input' | 'settings' = 'input') => {
     setPrimaryScript('')
     setNewPassword('')
     setOwlDigits('')
     setIpOctets(['10', '0', '0', '1'])
     setGrooveaPrefixOctets(['10', '0', '0'])
+    setLinkHostSuffixesState(defaultLinkHostSuffixStrings('legacy'))
     setGrooveaWirelessProtocol('nv2')
     setGrooveaWirelessBand('5 ГГц')
     setLinkKey('')
@@ -1241,11 +1612,16 @@ function MikrotikConfigGenerator() {
 
   const openForDevice = useCallback((id: string) => {
     const flow = getDeviceFlow(id)
+    const stack = getDeviceWirelessStack(id)
     setDeviceId(id)
     resetGeneratorState(flow === 'groovea' ? 'settings' : 'input')
     if (flow === 'groovea') {
       setNewPassword(GROOVEA_DEFAULT_PASSWORD)
       setLinkKey(generatePassword())
+      setGrooveaWirelessBand('5 ГГц')
+      setGrooveaWirelessProtocol(stack === 'wifi' ? '802.11' : 'nv2')
+      setLinkHostSuffixesState(defaultLinkHostSuffixStrings(stack))
+      setPreviewRole('ap')
     }
     setModalOpen(true)
   }, [resetGeneratorState, generatePassword])
@@ -1264,22 +1640,27 @@ function MikrotikConfigGenerator() {
   }, [resetGeneratorState])
 
   useEffect(() => {
-    if (!modalOpen) return
+    if (!anyModalOpen) return
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => {
       document.body.style.overflow = prev
     }
-  }, [modalOpen])
+  }, [anyModalOpen])
 
   useEffect(() => {
-    if (!modalOpen) return
+    if (!anyModalOpen) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeModal()
+      if (e.key !== 'Escape') return
+      if (viewingConfig) {
+        closeViewingConfig()
+        return
+      }
+      closeModal()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [modalOpen, closeModal])
+  }, [anyModalOpen, viewingConfig, closeViewingConfig, closeModal])
 
   const modal = modalOpen
     ? createPortal(
@@ -1399,7 +1780,7 @@ function MikrotikConfigGenerator() {
                       {isGroovea ? (
                         <div className="ml-6 flex w-fit flex-col gap-2">
                           <div className="flex flex-col gap-2">
-                            {GROOVEA_HOST_LABELS.map((label, rowIndex) => (
+                            {linkHostLabels.map((label, rowIndex) => (
                               <div key={label} className="flex flex-wrap items-center gap-x-3 gap-y-2">
                                 <span className="flex h-[42px] w-[6.5rem] shrink-0 items-center justify-center text-center text-[14px] font-medium text-label-secondary">
                                   {label}
@@ -1422,16 +1803,30 @@ function MikrotikConfigGenerator() {
                                           })
                                         }}
                                         onComplete={() => {
-                                          if (i < 2) grooveaIpInputRefs[rowIndex][i + 1].current?.focus()
+                                          grooveaIpInputRefs[rowIndex][i + 1]?.current?.focus()
                                         }}
                                       />
-                                      {i < 2 && <span className="text-[15px] text-label-tertiary/70">.</span>}
+                                      <span className="text-[15px] text-label-tertiary/70">.</span>
                                     </span>
                                   ))}
-                                  <span className="text-[15px] text-label-tertiary/70">.</span>
-                                  <span className="min-w-[2rem] text-center text-[15px] text-label-primary">
-                                    {GROOVEA_HOST_SUFFIXES[rowIndex]}
-                                  </span>
+                                  <IpOctetInput
+                                    plain
+                                    compact
+                                    value={linkHostSuffixesState[rowIndex] ?? ''}
+                                    inputRef={(el) => {
+                                      grooveaIpInputRefs[rowIndex][3].current = el
+                                    }}
+                                    onChange={(v) => {
+                                      setLinkHostSuffixesState((prev) => {
+                                        const next = [...prev]
+                                        while (next.length <= rowIndex) {
+                                          next.push('')
+                                        }
+                                        next[rowIndex] = v
+                                        return next
+                                      })
+                                    }}
+                                  />
                                   <span className="ml-1 text-[13px] text-label-tertiary">/24</span>
                                 </div>
                               </div>
@@ -1536,7 +1931,7 @@ function MikrotikConfigGenerator() {
                             setGrooveaSsid(e.target.value)
                           }}
                           onBlur={() => setGrooveaSsid((s) => s.trim())}
-                          placeholder="owl0000-GrooveA52"
+                          placeholder={`owl0000-${deviceNameSlug || 'device'}`}
                           className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40`}
                         />
                       </div>
@@ -1631,6 +2026,7 @@ function MikrotikConfigGenerator() {
 
                   {isGroovea ? (
                     <GrooveaWirelessSettings
+                      wirelessStack={deviceWirelessStack}
                       protocol={grooveaWirelessProtocol}
                       band={grooveaWirelessBand}
                       onProtocolChange={setGrooveaWirelessProtocol}
@@ -1656,15 +2052,14 @@ function MikrotikConfigGenerator() {
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
-                    
                     <span className="text-[13px] leading-relaxed text-label-tertiary">
                       Вставьте в терминал через WinBox или SSH.
                     </span>
                     {isGroovea && (
                       <SegmentToggle<GrooveaRole>
                         value={previewRole}
-                        options={GROOVEA_ROLES}
-                        labels={GROOVEA_ROLE_LABELS}
+                        options={linkRoles}
+                        labels={linkRoleLabels}
                         onChange={setPreviewRole}
                         ariaLabel="Выбор устройства для просмотра конфига"
                       />
@@ -1707,6 +2102,133 @@ function MikrotikConfigGenerator() {
                   </ModalFooter>
                 </div>
               )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )
+    : null
+
+  const viewingModal = viewingConfig
+    ? createPortal(
+        <div
+          className="tool-view fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6"
+          role="presentation"
+        >
+          <div
+            className="absolute inset-0 bg-[#0b0e16]/75 backdrop-blur-[6px] transition-opacity"
+            aria-hidden
+            onClick={closeViewingConfig}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="saved-mikrotik-config-modal-title"
+            className="relative z-[1] flex max-h-[min(90vh,780px)] w-full max-w-[36rem] flex-col overflow-hidden rounded-[1.25rem] border border-surface-border/90 bg-surface-card shadow-sheet"
+          >
+            <header className="relative flex shrink-0 items-center gap-3 overflow-hidden border-b border-surface-border/80 px-5 py-4">
+              <div
+                className="pointer-events-none absolute inset-0 bg-gradient-to-br from-tint-blue/[0.08] via-transparent to-transparent"
+                aria-hidden
+              />
+              {viewingDevice?.image ? (
+                <img
+                  src={viewingDevice.image}
+                  alt=""
+                  loading="eager"
+                  decoding="async"
+                  className="relative h-11 w-11 shrink-0 object-contain"
+                  draggable={false}
+                />
+              ) : (
+                <RouterIcon className="relative h-8 w-8 shrink-0 text-label-tertiary" />
+              )}
+              <div className="relative min-w-0 flex-1">
+                <p className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-label-tertiary">
+                  MikroTik
+                </p>
+                <h3
+                  id="saved-mikrotik-config-modal-title"
+                  className="m-0 mt-0.5 text-[17px] font-semibold leading-snug tracking-tight text-label-primary"
+                >
+                  {viewingConfig.deviceLabel}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeViewingConfig}
+                className="no-drag relative shrink-0 rounded-xl border border-transparent p-2 text-label-tertiary transition-colors hover:border-surface-border/80 hover:bg-white/[0.04] hover:text-label-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                aria-label="Закрыть"
+              >
+                <XMarkIcon className="h-4 w-4" />
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  {viewingHeaderText ? (
+                    <pre className="m-0 font-mono text-[13px] leading-[1.7] text-label-secondary whitespace-pre-wrap">
+                      {viewingHeaderText}
+                    </pre>
+                  ) : null}
+                  <span className="text-[13px] leading-relaxed text-label-tertiary">
+                    Вставьте в терминал через WinBox или SSH.
+                  </span>
+                  {viewingHasTabs && (
+                    <SegmentToggle<SavedConfigRole>
+                      value={viewingPreviewRole}
+                      options={viewingRoles}
+                      labels={viewingRoleLabels}
+                      onChange={setViewingPreviewRole}
+                      ariaLabel="Выбор устройства для просмотра конфига"
+                    />
+                  )}
+                  <pre className={`${fieldControlClass} m-0 max-h-[38vh] overflow-auto font-mono text-[13px] leading-[1.7]`}>
+                    <code>{viewingPreviewText || '(пусто)'}</code>
+                  </pre>
+                </div>
+
+                <ModalFooter>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteSavedConfig(viewingConfig.id)}
+                    className="mr-auto h-[42px] rounded-xl border border-transparent px-4 text-[14px] font-medium text-red-400 transition-colors hover:bg-red-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40"
+                  >
+                    Удалить
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={!viewingConfig.content}
+                      onClick={() => handleDownloadSavedConfig(viewingConfig)}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-surface-input/80 px-4 py-2.5 text-[14px] font-semibold text-label-secondary shadow-chromeTop transition-colors duration-200 hover:text-label-primary disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                    >
+                      <ArrowDownTrayIcon className="h-4 w-4 shrink-0" />
+                      Сохранить
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!viewingPreviewText}
+                      onClick={() =>
+                        void handleCopySavedConfigPreview(viewingPreviewText, viewingConfig.id)
+                      }
+                      className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-[14px] font-semibold transition-colors duration-200 disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+                        viewingCopied
+                          ? 'bg-emerald-500/10 text-emerald-300'
+                          : 'bg-surface-input/80 text-label-secondary shadow-chromeTop hover:text-label-primary'
+                      }`}
+                    >
+                      {viewingCopied ? (
+                        <CheckIcon className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <ClipboardDocumentIcon className="h-4 w-4 shrink-0" />
+                      )}
+                      {viewingCopied ? 'Скопировано' : 'Копировать'}
+                    </button>
+                  </div>
+                </ModalFooter>
+              </div>
             </div>
           </div>
         </div>,
@@ -1762,7 +2284,65 @@ function MikrotikConfigGenerator() {
         })}
       </div>
 
+      {groupedSavedConfigs.length > 0 && (
+        <div className="mt-10">
+          <header className="mb-3">
+            <h3 className="m-0 text-[14px] font-semibold uppercase tracking-[0.1em] text-label-tertiary">
+              Сохранённые конфиги
+            </h3>
+          </header>
+
+          <div className="flex flex-col gap-4">
+            {groupedSavedConfigs.map((group) => (
+              <div key={group.owlDigits} className="flex flex-col gap-2">
+                <p className="m-0 px-0.5 text-[12px] font-semibold uppercase tracking-[0.09em] leading-none text-tint-blue">
+                  <span className="font-normal [font-variation-settings:'wght'_430]">OWL</span>
+                  <span className="font-bold [font-variation-settings:'wght'_700]">{group.owlDigits}</span>
+                </p>
+
+                <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
+                  {group.configs.map((config) => {
+                    const device = MIKROTIK_CONFIG_DEVICES.find((d) => d.id === config.deviceId)
+                    return (
+                      <li key={config.id}>
+                        <button
+                          type="button"
+                          onClick={() => openSavedConfig(config)}
+                          className="group inline-flex items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                        >
+                          {device?.image ? (
+                            <img
+                              src={device.image}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              className="h-8 w-8 shrink-0 object-contain"
+                              draggable={false}
+                            />
+                          ) : (
+                            <RouterIcon className="h-5 w-5 shrink-0 text-label-tertiary" />
+                          )}
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span className="max-w-[8.5rem] truncate text-[13px] font-semibold leading-tight tracking-tight text-label-primary">
+                              {config.deviceLabel}
+                            </span>
+                            <span className="text-[12px] font-medium leading-tight tracking-tight text-label-tertiary">
+                              {formatConfigSavedAt(config.updatedAt)}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {modal}
+      {viewingModal}
     </section>
   )
 }
@@ -1770,10 +2350,14 @@ function MikrotikConfigGenerator() {
 export function WinBox() {
   const {
     checkStatus,
+    localReady,
     bundled,
+    hasUpdate,
+    latestVersion,
     sidebarOpenError,
     bundledExpectedName,
     setChecking,
+    setLocalStatus,
     setResult,
     setError,
     setSidebarOpenError
@@ -1783,11 +2367,15 @@ export function WinBox() {
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [launching, setLaunching] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  /** 'install' | 'update' — чтобы подпись кнопки отличала первую загрузку от обновления. */
+  const [downloadKind, setDownloadKind] = useState<'install' | 'update' | null>(null)
 
   const expectedName = bundledExpectedName || 'WinBox'
 
   const refreshWinboxInfo = useCallback(async () => {
     if (!window.api) return
+    const local = await window.api.winboxGetLocalStatus()
+    setLocalStatus(local)
     const info = await window.api.winboxCheckUpdate()
     setResult({
       bundled: info.bundled,
@@ -1797,20 +2385,26 @@ export function WinBox() {
       mikrotikOnline: info.mikrotikOnline,
       bundledExpectedName: info.bundledExpectedName
     })
-  }, [setResult])
+  }, [setLocalStatus, setResult])
 
   useEffect(() => {
     preloadDeviceImages()
   }, [])
 
+  // Быстрый локальный статус — кнопка не ждёт mikrotik.com.
+  useEffect(() => {
+    if (localReady || !window.api) return
+    void window.api.winboxGetLocalStatus().then(setLocalStatus)
+  }, [localReady, setLocalStatus])
+
+  // Проверка обновлений в фоне. Результат пишем в zustand даже после unmount,
+  // иначе при уходе со страницы checkStatus зависает в checking.
   useEffect(() => {
     if (checkStatus !== 'idle' || !window.api) return
-    let cancelled = false
     setChecking()
     window.api
       .winboxCheckUpdate()
       .then((info) => {
-        if (cancelled) return
         setResult({
           bundled: info.bundled,
           hasUpdate: info.hasUpdate,
@@ -1821,12 +2415,32 @@ export function WinBox() {
         })
       })
       .catch(() => {
-        if (!cancelled) setError()
+        setError()
       })
-    return () => {
-      cancelled = true
-    }
   }, [checkStatus, setChecking, setResult, setError])
+
+  const runDownload = useCallback(
+    async (kind: 'install' | 'update') => {
+      if (!window.api) return
+      setOpenError(null)
+      setDownloadError(null)
+      setSidebarOpenError(null)
+      setDownloadKind(kind)
+      setDownloading(true)
+      const result = await window.api.winboxDownloadBundled()
+      setDownloading(false)
+      setDownloadKind(null)
+      if (!result.ok) {
+        setDownloadError(
+          result.error ??
+            (kind === 'update' ? 'Не удалось обновить WinBox.' : 'Не удалось загрузить WinBox.')
+        )
+        return
+      }
+      await refreshWinboxInfo()
+    },
+    [refreshWinboxInfo, setSidebarOpenError]
+  )
 
   const handlePrimaryAction = useCallback(async () => {
     if (!window.api) return
@@ -1834,15 +2448,8 @@ export function WinBox() {
     setDownloadError(null)
     setSidebarOpenError(null)
 
-    if (!bundled && checkStatus === 'done') {
-      setDownloading(true)
-      const result = await window.api.winboxDownloadBundled()
-      setDownloading(false)
-      if (!result.ok) {
-        setDownloadError(result.error ?? 'Не удалось загрузить WinBox.')
-        return
-      }
-      await refreshWinboxInfo()
+    if (!bundled && localReady) {
+      await runDownload('install')
       return
     }
 
@@ -1857,19 +2464,34 @@ export function WinBox() {
           : `Не удалось запустить WinBox: ${result.error}`
       )
     }
-  }, [bundled, checkStatus, refreshWinboxInfo, setSidebarOpenError])
+  }, [bundled, localReady, runDownload, setSidebarOpenError])
 
-  const isChecking = checkStatus === 'checking'
-  const disabled = isChecking || launching || downloading
+  const handleUpdate = useCallback(() => {
+    void runDownload('update')
+  }, [runDownload])
 
-  const needsDownload = !bundled && checkStatus === 'done'
+  // Не блокируем кнопку ожиданием сети (winboxCheckUpdate → mikrotik.com).
+  const busy = launching || downloading
+  const disabled = busy || !localReady
+
+  const needsDownload = !bundled && localReady
+  const needsUpdate = bundled && hasUpdate
   const primaryLabel = launching
     ? 'Открываю…'
-    : downloading
+    : downloading && downloadKind === 'install'
       ? 'Загружаю…'
       : needsDownload
         ? 'Загрузить'
         : 'Открыть'
+  const updateLabel =
+    downloading && downloadKind === 'update'
+      ? 'Обновляю…'
+      : latestVersion
+        ? `Обновить ${latestVersion}`
+        : 'Обновить'
+
+  const headerBtnClass =
+    'inline-flex shrink-0 items-center justify-center rounded-md px-2.5 py-1.5 text-[12px] font-semibold tracking-tight shadow-sm transition-colors duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-window'
 
   return (
     <article style={{ paddingBottom: 50, margin: '0 auto' }} className="max-w-[36rem]">
@@ -1882,17 +2504,26 @@ export function WinBox() {
               WinBox
             </h1>
           </div>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={handlePrimaryAction}
-            className="inline-flex shrink-0 items-center justify-center rounded-md bg-tint-blue px-2.5 py-1.5 text-[12px] font-semibold tracking-tight text-white shadow-sm transition-colors duration-200
-              hover:bg-tint-blue-hover active:scale-[0.98]
-              disabled:cursor-not-allowed disabled:opacity-40
-              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-window"
-          >
-            {primaryLabel}
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {needsUpdate && (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={handleUpdate}
+                className={`${headerBtnClass} bg-surface-input/90 text-label-primary hover:bg-surface-input`}
+              >
+                {updateLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={handlePrimaryAction}
+              className={`${headerBtnClass} bg-tint-blue text-white hover:bg-tint-blue-hover`}
+            >
+              {primaryLabel}
+            </button>
+          </div>
         </div>
         <p className="text-label-secondary text-[15px] leading-relaxed">
           С помощью WinBox вы можете настроить любой продукт MikroTik.
@@ -1901,17 +2532,13 @@ export function WinBox() {
 
       <div className="flex flex-col gap-4">
         {/* not bundled warning — та же кнопка: сначала «Загрузить», после — «Открыть» */}
-        {!bundled && checkStatus === 'done' && (
+        {needsDownload && (
           <aside className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3">
             <p className="m-0 text-[14px] text-amber-400 leading-relaxed">
               {expectedName} не найден
-              </p>
-           
-           
+            </p>
           </aside>
         )}
-
-       
 
         {/* errors */}
         {((openError ?? sidebarOpenError) || downloadError) && (

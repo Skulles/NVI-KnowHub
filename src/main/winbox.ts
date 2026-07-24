@@ -353,10 +353,30 @@ function getBundledVersion(exePath: string): Promise<string> {
         `try { (Get-Item '${escaped}').VersionInfo.FileVersion } catch { '' }`],
       { windowsHide: true }
     )
+    let settled = false
+    const finish = (value: string): void => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    const timer = setTimeout(() => {
+      try {
+        ps.kill()
+      } catch {
+        /* ignore */
+      }
+      finish('')
+    }, 5000)
     let out = ''
     ps.stdout.on('data', (d: Buffer) => (out += d.toString()))
-    ps.on('close', () => resolve(out.trim().replace(/,/g, '.')))
-    ps.on('error', () => resolve(''))
+    ps.on('close', () => {
+      clearTimeout(timer)
+      finish(out.trim().replace(/,/g, '.'))
+    })
+    ps.on('error', () => {
+      clearTimeout(timer)
+      finish('')
+    })
   })
 }
 
@@ -380,9 +400,22 @@ export function setupWinbox(): void {
     return err ? { ok: false, error: err } : { ok: true }
   })
 
+  /** Быстрый локальный статус без сети — для кнопки «Открыть» / «Загрузить». */
+  ipcMain.handle(
+    'winbox:get-local-status',
+    (): { bundled: boolean; bundledExpectedName: string } => {
+      const bundledExpectedName = getBundledExpectedName()
+      return {
+        bundled: existsSync(getBundledPath()),
+        bundledExpectedName
+      }
+    }
+  )
+
   ipcMain.handle('winbox:check-update', async (): Promise<WinboxUpdateInfo> => {
     const exePath = getBundledPath()
     const bundledExpectedName = getBundledExpectedName()
+    const bundled = existsSync(exePath)
     const [fetchResult, local] = await Promise.all([
       fetchWinboxPageStatus(),
       getBundledVersion(exePath)
@@ -392,7 +425,7 @@ export function setupWinbox(): void {
       latest,
       local,
       hasUpdate: !!latest && !!local && versionGt(latest, local),
-      bundled: existsSync(exePath),
+      bundled,
       mikrotikOnline: fetchResult.reachable,
       bundledExpectedName
     }

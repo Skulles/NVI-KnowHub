@@ -1,15 +1,69 @@
+import type { MonitoringCameraStream } from '@shared/api'
+
 export interface MonitoringObject {
   id: string
   code: string
   linkHost: string
   serverHost: string
+  serverLogin: string
+  serverPassword: string
+  /** Cached OWL.Guard version from last successful check. */
+  serverVersion?: string
+  /** Cached streams from /gateway/config/streams. */
+  cameraStreams?: MonitoringCameraStream[]
+  /** Count of streams (cameras total, shown after /). */
+  camerasTotal?: number
+  /** Online cameras from PreviewV2 (shown before /). */
+  camerasOnline?: number
+  /** Megaphones total from /gateway/config/core/megaphones. */
+  megaphonesTotal?: number
+  /** Online megaphones from /gateway/Megaphone/statuses/V2. */
+  megaphonesOnline?: number
 }
 
 export interface MonitoringSnapshot {
   objects: MonitoringObject[]
 }
 
-export const MONITORING_REFRESH_INTERVAL_MS = 5000
+export const DEFAULT_SERVER_LOGIN = 'service'
+
+function normalizeCameraStreams(value: unknown): MonitoringCameraStream[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const streams: MonitoringCameraStream[] = []
+  value.forEach((item) => {
+    if (!item || typeof item !== 'object') return
+    const record = item as Record<string, unknown>
+    const id = typeof record.id === 'number' && Number.isFinite(record.id) ? record.id : null
+    if (id === null) return
+
+    const stream: MonitoringCameraStream = { id }
+    if (typeof record.connected === 'boolean') stream.connected = record.connected
+
+    if (record.expectedImageSize && typeof record.expectedImageSize === 'object') {
+      const size = record.expectedImageSize as Record<string, unknown>
+      stream.expectedImageSize = {
+        ...(typeof size.width === 'number' ? { width: size.width } : {}),
+        ...(typeof size.height === 'number' ? { height: size.height } : {})
+      }
+    }
+
+    if (record.stream && typeof record.stream === 'object') {
+      const media = record.stream as Record<string, unknown>
+      stream.stream = {
+        ...(typeof media.url === 'string' || media.url === null ? { url: media.url as string | null } : {}),
+        ...(media.onvif !== undefined ? { onvif: media.onvif } : {}),
+        ...(typeof media.locationId === 'number' || media.locationId === null
+          ? { locationId: media.locationId as number | null }
+          : {})
+      }
+    }
+
+    streams.push(stream)
+  })
+
+  return streams
+}
 
 const STORAGE_KEY = 'monitoring-tool-v1'
 const OBJECT_RE = /^(?:owl)?(\d{2})(\d{2})\/?$/i
@@ -74,14 +128,18 @@ export function parseMonitoringObject(raw: string): MonitoringObject | null {
     id: normalizedCode,
     code: normalizedCode,
     linkHost: `10.${Number(nn)}.${Number(yy)}.1`,
-    serverHost: `10.${Number(nn)}.${Number(yy)}.252`
+    serverHost: `10.${Number(nn)}.${Number(yy)}.252`,
+    serverLogin: DEFAULT_SERVER_LOGIN,
+    serverPassword: ''
   }
 }
 
 export function buildMonitoringObject(
   digits: string,
   linkHost: string,
-  serverHost: string
+  serverHost: string,
+  serverLogin = DEFAULT_SERVER_LOGIN,
+  serverPassword = ''
 ): MonitoringObject | null {
   const parsed = parseMonitoringObject(digits)
   if (!parsed) return null
@@ -90,7 +148,9 @@ export function buildMonitoringObject(
   return {
     ...parsed,
     linkHost: linkHost.trim(),
-    serverHost: serverHost.trim()
+    serverHost: serverHost.trim(),
+    serverLogin: serverLogin.trim(),
+    serverPassword: serverPassword
   }
 }
 
@@ -123,9 +183,56 @@ function normalizeObjects(value: unknown): MonitoringObject[] {
       'serverHost' in item && typeof item.serverHost === 'string' && isValidIPv4(item.serverHost)
         ? item.serverHost.trim()
         : parsed.serverHost
+    const serverLogin =
+      'serverLogin' in item && typeof item.serverLogin === 'string' && item.serverLogin.trim()
+        ? item.serverLogin.trim()
+        : DEFAULT_SERVER_LOGIN
+    const serverPassword = 'serverPassword' in item && typeof item.serverPassword === 'string' ? item.serverPassword : ''
+    const serverVersion =
+      'serverVersion' in item && typeof item.serverVersion === 'string' && item.serverVersion.trim()
+        ? item.serverVersion.trim()
+        : undefined
+    const cameraStreams = normalizeCameraStreams(
+      'cameraStreams' in item ? (item as { cameraStreams?: unknown }).cameraStreams : undefined
+    )
+    const camerasTotal =
+      'camerasTotal' in item &&
+      typeof (item as { camerasTotal?: unknown }).camerasTotal === 'number' &&
+      Number.isFinite((item as { camerasTotal: number }).camerasTotal)
+        ? Math.max(0, Math.round((item as { camerasTotal: number }).camerasTotal))
+        : cameraStreams?.length
+    const camerasOnline =
+      'camerasOnline' in item &&
+      typeof (item as { camerasOnline?: unknown }).camerasOnline === 'number' &&
+      Number.isFinite((item as { camerasOnline: number }).camerasOnline)
+        ? Math.max(0, Math.round((item as { camerasOnline: number }).camerasOnline))
+        : undefined
+    const megaphonesTotal =
+      'megaphonesTotal' in item &&
+      typeof (item as { megaphonesTotal?: unknown }).megaphonesTotal === 'number' &&
+      Number.isFinite((item as { megaphonesTotal: number }).megaphonesTotal)
+        ? Math.max(0, Math.round((item as { megaphonesTotal: number }).megaphonesTotal))
+        : undefined
+    const megaphonesOnline =
+      'megaphonesOnline' in item &&
+      typeof (item as { megaphonesOnline?: unknown }).megaphonesOnline === 'number' &&
+      Number.isFinite((item as { megaphonesOnline: number }).megaphonesOnline)
+        ? Math.max(0, Math.round((item as { megaphonesOnline: number }).megaphonesOnline))
+        : undefined
 
     seen.add(parsed.id)
-    objects.push({ ...parsed, linkHost, serverHost })
+    objects.push({
+      ...parsed,
+      linkHost,
+      serverHost,
+      serverLogin,
+      serverPassword,
+      ...(serverVersion ? { serverVersion } : {}),
+      ...(cameraStreams ? { cameraStreams, camerasTotal: camerasTotal ?? cameraStreams.length } : {}),
+      ...(camerasOnline !== undefined ? { camerasOnline } : {}),
+      ...(megaphonesTotal !== undefined ? { megaphonesTotal } : {}),
+      ...(megaphonesOnline !== undefined ? { megaphonesOnline } : {})
+    })
   })
 
   return objects

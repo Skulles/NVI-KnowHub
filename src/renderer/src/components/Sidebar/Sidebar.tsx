@@ -161,7 +161,7 @@ export function Sidebar(): React.ReactElement {
                 KnowHub
               </span>
             </div>
-            <div className="text-[9px] font-medium uppercase tracking-[0.13em] leading-tight text-tint-blue whitespace-nowrap">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] leading-tight text-tint-blue whitespace-nowrap">
               {BRAND_SUBTITLE}
             </div>
           </div>

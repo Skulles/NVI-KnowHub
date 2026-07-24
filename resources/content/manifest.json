@@ -1,5 +1,5 @@
 {
-  "version": 24,
+  "version": 46,
   "sections": [
     {
       "id": "instructions",
@@ -8,21 +8,21 @@
       "subsections": [
         {
           "id": "mikrotik",
-          "title": "Mikrotik",
+          "title": "MikroTik",
           "items": [
-            {
-              "id": "article-1781203432995",
-              "title": "LtAP mini LTE kit",
-              "type": "article",
-              "htmlFile": "ltap-mini-lte-kit.html",
-              "version": 7
-            },
             {
               "id": "article-1781512786412",
               "title": "Подготовка устройства",
               "type": "article",
               "htmlFile": "podgotovka-ustroystva.html",
-              "version": 1
+              "version": 9
+            },
+            {
+              "id": "article-1781203432995",
+              "title": "LtAP mini LTE kit",
+              "type": "article",
+              "htmlFile": "ltap-mini-lte-kit.html",
+              "version": 18
             }
           ]
         }

@@ -2,7 +2,7 @@
  * Electron main process entry: single-instance lock, BrowserWindow,
  * security hooks, and IPC wiring for content / updater / WinBox / monitoring.
  */
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, screen } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { setupUpdater, isQuittingForUpdate } from './updater'
@@ -60,13 +60,29 @@ function attachWindowSecurity(mainWindow: BrowserWindow): void {
   })
 }
 
+/** Совпадает с Tailwind `xl`: при этой ширине viewport «Содержание» уходит в правую колонку. */
+const ARTICLE_TOC_SIDEBAR_MIN_WIDTH = 1280
+const DEFAULT_WINDOW_HEIGHT = 800
+const MIN_WINDOW_WIDTH = 900
+const MIN_WINDOW_HEIGHT = 600
+
+function getDefaultWindowSize(): { width: number; height: number } {
+  const { width: workWidth, height: workHeight } = screen.getPrimaryDisplay().workAreaSize
+  return {
+    width: Math.min(ARTICLE_TOC_SIDEBAR_MIN_WIDTH, Math.max(MIN_WINDOW_WIDTH, workWidth)),
+    height: Math.min(DEFAULT_WINDOW_HEIGHT, Math.max(MIN_WINDOW_HEIGHT, workHeight))
+  }
+}
+
 function createWindow(): BrowserWindow {
   const icon = getWindowIconPath()
+  const { width, height } = getDefaultWindowSize()
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width,
+    height,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
+    useContentSize: true,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',

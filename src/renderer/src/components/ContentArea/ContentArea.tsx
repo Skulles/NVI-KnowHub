@@ -136,10 +136,10 @@ function ArticleDocument({ html, title }: { html: string; title: string }): Reac
 
   return (
     <ArticleToc containerRef={contentWrapperRef} contentKey={bodyHtml}>
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,54rem)_11rem] xl:justify-center">
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,46rem)_11rem] xl:justify-center">
         <div ref={contentWrapperRef} className="article-view min-w-0">
           <header className="mb-9 px-0.5">
-            <h1 className="text-[2rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.12]">{title}</h1>
+            <h1 className="text-[2rem] font-semibold tracking-[-0.032em] leading-[1.15] text-label-primary">{title}</h1>
             {leadInner && (
               <p
                 className="article-lead mt-5 text-[16px] leading-[1.64] [&_strong]:font-semibold [&_strong]:text-label-primary"
@@ -206,13 +206,13 @@ function EmptyState(): React.ReactElement {
 function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElement {
   return (
     <div
-      className="article-loading grid items-start gap-4 xl:grid-cols-[minmax(0,54rem)_11rem] xl:justify-center"
+      className="article-loading grid items-start gap-6 xl:grid-cols-[minmax(0,46rem)_11rem] xl:justify-center"
       aria-busy
       aria-label="Загрузка статьи"
     >
       <div className="min-w-0">
         <header className="mb-9 px-0.5">
-          <h1 className="text-[2rem] font-semibold tracking-[-0.032em] text-label-primary leading-[1.12]">
+          <h1 className="text-[2rem] font-semibold tracking-[-0.032em] leading-[1.15] text-label-primary">
             {title}
           </h1>
           <div className="mt-5 space-y-2.5">

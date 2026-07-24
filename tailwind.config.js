@@ -17,6 +17,14 @@ export default {
           'system-ui',
           'sans-serif'
         ],
+        mono: [
+          '"JetBrains Mono Variable"',
+          '"JetBrains Mono"',
+          '"Cascadia Code"',
+          '"SFMono-Regular"',
+          'Consolas',
+          'monospace'
+        ],
         /** Заголовок приложения — геометрический акцент к Inter в интерфейсе */
         brand: [
           '"Outfit Variable"',
