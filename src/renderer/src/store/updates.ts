@@ -13,6 +13,14 @@ export function markAppUpdateInstallOnNextLaunch(): void {
   }
 }
 
+export function peekAppUpdateInstallOnNextLaunch(): boolean {
+  try {
+    return localStorage.getItem(APP_UPDATE_POSTPONE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function consumeAppUpdateInstallOnNextLaunch(): boolean {
   try {
     if (localStorage.getItem(APP_UPDATE_POSTPONE_KEY) !== '1') return false
@@ -36,13 +44,15 @@ interface UpdatesStore {
   appUpdateAvailable: boolean
   appUpdateDismissed: boolean
   appUpdateDownloading: boolean
+  /** Тихая загрузка после «Позже» — без углового индикатора. */
+  appUpdateSilentDownload: boolean
   appUpdateProgress: number | null
   appUpdateDownloaded: boolean
   appUpdateError: string | null
   dismissContentUpdate: () => void
   dismissAppUpdate: () => void
   setAppUpdateAvailable: () => void
-  setAppUpdateDownloading: (downloading: boolean) => void
+  beginAppUpdateDownload: (opts?: { silent?: boolean }) => void
   setAppUpdateProgress: (percent: number) => void
   setAppUpdateDownloaded: () => void
   setAppUpdateError: (message: string | null) => void
@@ -53,6 +63,7 @@ export const useUpdatesStore = create<UpdatesStore>((set) => ({
   appUpdateAvailable: false,
   appUpdateDismissed: false,
   appUpdateDownloading: false,
+  appUpdateSilentDownload: false,
   appUpdateProgress: null,
   appUpdateDownloaded: false,
   appUpdateError: null,
@@ -63,34 +74,52 @@ export const useUpdatesStore = create<UpdatesStore>((set) => ({
     set({
       appUpdateAvailable: true,
       appUpdateDismissed: false,
-      appUpdateDownloading: true,
-      appUpdateProgress: 0,
+      appUpdateDownloading: false,
+      appUpdateSilentDownload: false,
+      appUpdateProgress: null,
+      appUpdateDownloaded: false,
       appUpdateError: null
     }),
-  setAppUpdateDownloading: (downloading) =>
+  beginAppUpdateDownload: (opts) =>
     set({
-      appUpdateDownloading: downloading,
-      appUpdateProgress: downloading ? 0 : null,
-      appUpdateError: downloading ? null : null
+      appUpdateDownloading: true,
+      appUpdateSilentDownload: opts?.silent === true,
+      appUpdateProgress: 0,
+      appUpdateDismissed: false,
+      appUpdateError: null
     }),
   setAppUpdateProgress: (percent) => set({ appUpdateProgress: percent }),
   setAppUpdateDownloaded: () =>
     set({
       appUpdateDownloaded: true,
       appUpdateDownloading: false,
+      appUpdateSilentDownload: false,
       appUpdateProgress: 100,
       appUpdateDismissed: false,
       appUpdateError: null
     }),
   setAppUpdateError: (message) =>
-    set({
-      appUpdateError: message,
-      appUpdateDownloading: false
-    })
+    set(
+      message
+        ? {
+            appUpdateError: message,
+            appUpdateDownloading: false,
+            appUpdateSilentDownload: false,
+            appUpdateDismissed: false
+          }
+        : {
+            appUpdateError: null,
+            appUpdateDownloading: false,
+            appUpdateSilentDownload: false
+          }
+    )
 }))
 
-/** Тост «обновление готово» / ошибка — для стека с другими тостами. */
+/** Центральный тост (доступно / готово / ошибка) — для стека с другими тостами. */
 export function isAppUpdateToastVisible(state: UpdatesStore): boolean {
   if (state.appUpdateDismissed) return false
-  return state.appUpdateDownloaded || !!state.appUpdateError
+  if (state.appUpdateError) return true
+  if (state.appUpdateDownloaded) return true
+  if (state.appUpdateAvailable && !state.appUpdateDownloading) return true
+  return false
 }

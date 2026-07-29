@@ -1041,7 +1041,7 @@ function buildMantboxAxLanBlock(options: {
     `/interface bridge add name=bridge-lan`,
     `/interface bridge port add bridge=bridge-lan interface=ether1`,
     `/interface bridge port add bridge=bridge-lan interface=${wifiIface}`,
-    `/interface wifi set [find default-name=${wifiIface}] disabled=no configuration.mode=${mode} configuration.ssid="${escapedSsid}" configuration.country=Russia configuration.installation=outdoor configuration.antenna-gain=${antennaGain} security.authentication-types=wpa2-psk security.passphrase="${escapedKey}" channel.band=${wifiBand} channel.frequency=${frequency} channel.width=20mhz channel.skip-dfs-channels=all`,
+    `/interface wifi set [find default-name=${wifiIface}] disabled=no configuration.mode=${mode} configuration.ssid="${escapedSsid}" configuration.country=Russia configuration.antenna-gain=${antennaGain} security.authentication-types=wpa2-psk security.passphrase="${escapedKey}" channel.band=${wifiBand} channel.frequency=${frequency} channel.width=20mhz channel.skip-dfs-channels=all`,
     `/interface wifi set [find default-name=${unusedIface}] disabled=yes`,
     `/ip address add address=${ipAddr}/24 network=${net} interface=bridge-lan`,
   ]
@@ -1079,22 +1079,22 @@ function buildGrooveaLanBlock(options: {
   if (protocol === 'nv2') {
     if (role === 'ap') {
       lines.push(
-        `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia installation=outdoor`,
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia`,
       )
     } else {
       lines.push(
-        `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia installation=outdoor`,
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia`,
       )
     }
   } else if (role === 'ap') {
     lines.push(
       `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia installation=outdoor`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia`,
     )
   } else {
     lines.push(
       `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia installation=outdoor`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia`,
     )
   }
 

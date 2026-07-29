@@ -7,7 +7,12 @@ import { ContentArea } from './components/ContentArea/ContentArea'
 import { UpdateBanner } from './components/UpdateBanner/UpdateBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { initContentStore, MIN_INSTRUCTIONS_REFRESH_MS, useContentStore } from './store/content'
-import { clearAppUpdateInstallOnNextLaunch, consumeAppUpdateInstallOnNextLaunch, useUpdatesStore } from './store/updates'
+import {
+  clearAppUpdateInstallOnNextLaunch,
+  consumeAppUpdateInstallOnNextLaunch,
+  peekAppUpdateInstallOnNextLaunch,
+  useUpdatesStore
+} from './store/updates'
 
 export default function App(): React.ReactElement {
   const {
@@ -36,6 +41,9 @@ export default function App(): React.ReactElement {
 
     let contentRefreshCancelled = false
     let sawUpdateDownloaded = false
+    let updateLifecycleStarted = false
+    // Флаг «установить при следующем запуске», уже бывший до старта этой сессии.
+    const autoInstallFromPreviousSession = peekAppUpdateInstallOnNextLaunch()
 
     const offContent = window.api.onContentUpdated(() => {
       void (async () => {
@@ -59,6 +67,12 @@ export default function App(): React.ReactElement {
     })
 
     const offUpdateAvailable = window.api.onAppUpdateAvailable(() => {
+      updateLifecycleStarted = true
+      // Предыдущая сессия отложила установку — качаем тихо и ставим без тоста.
+      if (autoInstallFromPreviousSession) {
+        void window.api?.startAppUpdateDownload()
+        return
+      }
       setAppUpdateAvailable()
     })
 
@@ -68,9 +82,21 @@ export default function App(): React.ReactElement {
 
     const offUpdateDownloaded = window.api.onAppUpdateDownloaded(() => {
       sawUpdateDownloaded = true
-      // «Отложить» — установить автоматически при следующем запуске, без тоста.
-      if (consumeAppUpdateInstallOnNextLaunch()) {
+      // Отложено в прошлой сессии → ставим сразу, без тоста.
+      if (autoInstallFromPreviousSession && consumeAppUpdateInstallOnNextLaunch()) {
         void window.api?.installAppUpdate()
+        return
+      }
+      // «Позже» в этой сессии — держим флаг до следующего запуска, тост не показываем.
+      if (peekAppUpdateInstallOnNextLaunch()) {
+        useUpdatesStore.setState({
+          appUpdateDownloaded: true,
+          appUpdateDownloading: false,
+          appUpdateSilentDownload: false,
+          appUpdateDismissed: true,
+          appUpdateProgress: 100,
+          appUpdateError: null
+        })
         return
       }
       setAppUpdateDownloaded()
@@ -80,9 +106,9 @@ export default function App(): React.ReactElement {
       setAppUpdateError(message)
     })
 
-    // Если отложенное обновление уже поставилось при выходе — сбросить флаг.
+    // Осиротевший флаг: отложили, а апдейт в этой сессии так и не пришёл.
     const clearOrphanPostpone = window.setTimeout(() => {
-      if (!sawUpdateDownloaded) clearAppUpdateInstallOnNextLaunch()
+      if (!sawUpdateDownloaded && !updateLifecycleStarted) clearAppUpdateInstallOnNextLaunch()
     }, 20_000)
 
     return () => {

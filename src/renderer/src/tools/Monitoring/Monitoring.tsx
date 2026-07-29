@@ -26,27 +26,36 @@ import {
 } from './monitoringStorage'
 import {
   MONITORING_LINK_INTERVAL_MS,
-  MONITORING_MAX_LINK_BATCH,
-  MONITORING_MAX_PREVIEW_BATCH,
-  MONITORING_MAX_SERVER_BATCH,
   MONITORING_PREVIEW_INTERVAL_MS,
   MONITORING_SERVER_INTERVAL_MS,
   MONITORING_STREAMS_REFRESH_MS,
   MONITORING_TICK_MS,
+  appendLinkStatusSample,
   createProbeSchedule,
   failureBackoffMs,
+  isLinkUnstable,
+  linkBatchLimit,
   linkFailureBackoffMs,
+  previewBatchLimit,
+  schedulerTickMs,
+  serverBatchLimit,
   successDelayMs,
+  type LinkStatusSample,
   type ObjectProbeSchedule
 } from './monitoringSchedule'
 
 type ResultMap = Record<string, MonitoringPingResult>
 type LatencyHistoryMap = Record<string, number[]>
+type LinkStatusHistoryMap = Record<string, LinkStatusSample[]>
 type VersionErrorMap = Record<string, string>
+type IdFlagMap = Record<string, boolean>
 type EditorState = { mode: 'add' | 'edit'; objectId?: string } | null
 
 const LINK_LATENCY_HISTORY_LIMIT = 10
 const OWL_GUARD_UNREACHABLE = 'не удалось подключиться к OWL.Guard'
+const METRICS_UNAVAILABLE = 'метрики недоступны'
+const METRICS_LOADING = 'загрузка метрик…'
+const LINK_UNSTABLE = 'связь нестабильна'
 
 function versionFetchKey(object: MonitoringObject): string {
   return `${object.id}|${object.serverHost}|${object.serverLogin}|${object.serverPassword}`
@@ -121,9 +130,46 @@ function isOnline(result: MonitoringPingResult | undefined): boolean {
   return (result?.status ?? 'unknown') === 'online'
 }
 
+/** Objects that still need a first link and/or server result. */
+function needsProbeCatchUp(objects: MonitoringObject[], results: ResultMap): boolean {
+  for (const object of objects) {
+    const link = results[targetId(object.id, 'link')]
+    if (!link) return true
+    if (isOnline(link) && !results[targetId(object.id, 'server')]) return true
+  }
+  return false
+}
+
+/** Objects online but still waiting for the first camera/megaphone metric. */
+function needsMetricsCatchUp(objects: MonitoringObject[], results: ResultMap): boolean {
+  for (const object of objects) {
+    if (!isOnline(results[targetId(object.id, 'link')])) continue
+    if (!isOnline(results[targetId(object.id, 'server')])) continue
+    const camerasTotal = object.camerasTotal ?? object.cameraStreams?.length ?? 0
+    if (camerasTotal > 0 && object.camerasOnline === undefined) return true
+    if ((object.megaphonesTotal ?? 0) > 0 && object.megaphonesOnline === undefined) return true
+  }
+  return false
+}
+
 function averageLatency(history: number[] | undefined): number | null {
   if (!history?.length) return null
   return history.reduce((sum, value) => sum + value, 0) / history.length
+}
+
+function clearIdFlag(prev: IdFlagMap, id: string): IdFlagMap {
+  if (!(id in prev)) return prev
+  const next = { ...prev }
+  delete next[id]
+  return next
+}
+
+function setIdFlags(ids: string[], value: boolean): IdFlagMap {
+  const next: IdFlagMap = {}
+  ids.forEach((id) => {
+    next[id] = value
+  })
+  return next
 }
 
 function formatLatency(latencyMs: number): string {
@@ -137,8 +183,13 @@ function latencyTextClasses(latencyMs: number | null): string {
   return 'text-red-400'
 }
 
-function statusText(status: MonitoringPingStatus | 'unknown', checking: boolean): string {
+function statusText(
+  status: MonitoringPingStatus | 'unknown',
+  checking: boolean,
+  degraded = false
+): string {
   if (checking) return 'Проверка'
+  if (degraded && status === 'online') return 'Частично'
   switch (status) {
     case 'online':
       return 'Онлайн'
@@ -165,8 +216,13 @@ function linkConnectionText(status: MonitoringPingStatus | 'unknown', checking: 
   }
 }
 
-function statusClasses(status: MonitoringPingStatus | 'unknown', checking: boolean): string {
+function statusClasses(
+  status: MonitoringPingStatus | 'unknown',
+  checking: boolean,
+  degraded = false
+): string {
   if (checking && status === 'unknown') return 'text-tint-blue'
+  if (degraded && status === 'online') return 'text-amber-300'
   switch (status) {
     case 'online':
       return 'text-emerald-400'
@@ -314,7 +370,8 @@ function ObjectMetricStatus({
   icon,
   muted = false,
   onlineUnknown = false,
-  loading = false
+  loading = false,
+  failed = false
 }: {
   label: string
   /** `null` — сервер ещё не ответил числом online. */
@@ -324,16 +381,24 @@ function ObjectMetricStatus({
   muted?: boolean
   /** When true, show "?" instead of the online count (e.g. no link). */
   onlineUnknown?: boolean
-  /** First PreviewV2 in progress — spinner instead of the online count. */
+  /** Probe in flight — spinner instead of the online count. */
   loading?: boolean
+  /** Last probe failed — keep ?/N without an endless spinner. */
+  failed?: boolean
 }) {
-  const hasOnlineValue = online !== null && !onlineUnknown && !loading
+  const hasOnlineValue = online !== null && !onlineUnknown && !loading && !failed
   const statusClass =
-    muted || onlineUnknown || loading || online === null
-      ? 'text-label-tertiary'
+    muted || onlineUnknown || loading || failed || online === null
+      ? failed && !muted
+        ? 'text-amber-300'
+        : 'text-label-tertiary'
       : ratioStatusClass(online, total)
-  const onlineLabel = onlineUnknown || online === null ? '?' : String(online)
-  const title = loading ? `${label}: загрузка…` : `${label}: ${onlineLabel}/${total}`
+  const onlineLabel = onlineUnknown || online === null || failed ? '?' : String(online)
+  const title = loading
+    ? `${label}: ${METRICS_LOADING}`
+    : failed
+      ? `${label}: ${METRICS_UNAVAILABLE}`
+      : `${label}: ${onlineLabel}/${total}`
 
   return (
     <>
@@ -342,7 +407,11 @@ function ObjectMetricStatus({
       </span>
       <p
         className={`m-0 flex h-6 items-center font-mono text-[18px] font-semibold leading-6 tracking-tight ${
-          muted || onlineUnknown || loading || !hasOnlineValue ? 'text-label-tertiary' : 'text-label-primary'
+          muted || onlineUnknown || loading || failed || !hasOnlineValue
+            ? failed && !muted
+              ? 'text-amber-300'
+              : 'text-label-tertiary'
+            : 'text-label-primary'
         }`}
         title={title}
       >
@@ -773,60 +842,6 @@ function ObjectEditorModal({
   )
 }
 
-function ScrollingLine({
-  text,
-  className = '',
-  title
-}: {
-  text: string
-  className?: string
-  title?: string
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const textRef = useRef<HTMLSpanElement>(null)
-  const [shiftPx, setShiftPx] = useState(0)
-
-  useEffect(() => {
-    const container = containerRef.current
-    const el = textRef.current
-    if (!container || !el) return
-
-    const update = (): void => {
-      setShiftPx(Math.max(0, el.scrollWidth - container.clientWidth))
-    }
-
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [text])
-
-  const durationSec = Math.max(6, Math.round(shiftPx / 18) + 4)
-
-  return (
-    <div
-      ref={containerRef}
-      className={`mt-0.5 min-h-[1.125rem] overflow-hidden ${className}`}
-      title={title}
-    >
-      <span
-        ref={textRef}
-        className="inline-block max-w-none whitespace-nowrap will-change-transform"
-        style={
-          shiftPx > 0
-            ? {
-                ['--marquee-shift' as string]: `-${shiftPx}px`,
-                animation: `monitoring-marquee ${durationSec}s linear infinite`
-              }
-            : undefined
-        }
-      >
-        {text}
-      </span>
-    </div>
-  )
-}
-
 function EndpointStatus({
   label,
   host,
@@ -835,6 +850,8 @@ function EndpointStatus({
   kind,
   averageLatencyMs,
   muted = false,
+  degraded = false,
+  unstable = false,
   serverVersion = null,
   serverVersionError = null
 }: {
@@ -845,97 +862,97 @@ function EndpointStatus({
   kind: 'link' | 'server'
   averageLatencyMs?: number | null
   muted?: boolean
+  /** Server reachable but metrics/auth partially unavailable. */
+  degraded?: boolean
+  /** Link recently flapped online↔offline. */
+  unstable?: boolean
   serverVersion?: string | null
   serverVersionError?: string | null
 }) {
   const status = result?.status ?? 'unknown'
   const linkLatencyMs =
-    kind === 'link' && !muted && status === 'online' ? (averageLatencyMs ?? result?.latencyMs ?? null) : null
+    kind === 'link' && !muted && status === 'online'
+      ? (averageLatencyMs ?? result?.latencyMs ?? null)
+      : null
   const showPing = linkLatencyMs !== null && linkLatencyMs !== undefined
+  const showUnstable = kind === 'link' && unstable && status === 'online'
   const serverNoReply = kind === 'server' && !muted && status === 'offline'
   const owlGuardFailed = kind === 'server' && !muted && status === 'error'
   const authOrVersionFailed = kind === 'server' && !muted && !!serverVersionError
-  const serverWarning = owlGuardFailed || authOrVersionFailed
+  const colorWarning =
+    showUnstable || owlGuardFailed || authOrVersionFailed || (degraded && status === 'online')
   const versionLabel = serverVersion ? formatServerVersionLabel(serverVersion) : null
+  // Visible line: factual data, except link flapping — shown in the ping subtitle.
   const detail =
     kind === 'link'
-      ? status === 'online' && !muted && showPing
-        ? formatLatency(linkLatencyMs)
-        : linkConnectionText(status, checking)
-      : muted
-        ? versionLabel || host
-        : serverNoReply
-          ? 'нет ответа'
-          : owlGuardFailed
-            ? OWL_GUARD_UNREACHABLE
-            : serverVersionError || versionLabel || host
+      ? showUnstable
+        ? LINK_UNSTABLE
+        : showPing
+          ? formatLatency(linkLatencyMs)
+          : status === 'online' || checking || status === 'unknown'
+            ? linkConnectionText(status, checking)
+            : host
+      : versionLabel || host
   const statusClass = muted
     ? 'text-label-tertiary'
-    : serverWarning
-      ? 'text-amber-300'
-      : statusClasses(status, checking)
+    : colorWarning || serverNoReply
+      ? serverNoReply
+        ? statusClasses('offline', checking)
+        : 'text-amber-300'
+      : statusClasses(status, checking, degraded)
   const detailClass = muted
     ? 'text-label-tertiary'
-    : kind === 'link' && showPing
-      ? latencyTextClasses(linkLatencyMs)
+    : kind === 'link' && (showUnstable || showPing)
+      ? colorWarning || showUnstable
+        ? 'text-amber-300'
+        : latencyTextClasses(linkLatencyMs)
       : kind === 'link'
         ? checking || status === 'unknown' || status === 'offline'
           ? 'text-label-tertiary'
-          : statusClass
+          : colorWarning
+            ? 'text-amber-300'
+            : statusClass
         : serverNoReply
           ? statusClass
-          : serverWarning
+          : colorWarning
             ? 'text-amber-300'
             : 'text-label-tertiary'
-  const detailTitle = serverNoReply
-    ? `нет ответа · ${host}`
-    : owlGuardFailed
-      ? OWL_GUARD_UNREACHABLE
-      : kind === 'server' && serverVersionError
-        ? `${serverVersionError} · ${host}`
-        : kind === 'server' && versionLabel
-          ? `${versionLabel} · ${host}`
-          : host
-  const iconTitle = muted
+  const statusHint = muted
     ? 'Связь недоступна'
-    : serverNoReply
-      ? 'нет ответа'
-      : owlGuardFailed
-        ? OWL_GUARD_UNREACHABLE
-        : authOrVersionFailed
-          ? serverVersionError
-          : statusText(status, checking)
+    : showUnstable
+      ? LINK_UNSTABLE
+      : serverNoReply
+        ? 'нет ответа'
+        : owlGuardFailed
+          ? OWL_GUARD_UNREACHABLE
+          : degraded && kind === 'server'
+            ? serverVersionError || METRICS_UNAVAILABLE
+            : authOrVersionFailed
+              ? serverVersionError
+              : statusText(status, checking, degraded)
+  const detailTitle = [statusHint, showUnstable && showPing ? formatLatency(linkLatencyMs!) : null, versionLabel, host]
+    .filter((part): part is string => Boolean(part))
+    .filter((part, index, all) => all.indexOf(part) === index)
+    .join(' · ')
 
   return (
-    <div className="min-h-[2.5rem] min-w-0 overflow-hidden">
+    <div className="min-h-[2.5rem] min-w-0 overflow-hidden" title={detailTitle}>
       <div className="flex min-w-0 items-start gap-3">
-        <span
-          className={`flex h-10 w-10 shrink-0 items-center justify-center ${statusClass}`}
-          title={iconTitle}
-        >
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center ${statusClass}`} title={statusHint}>
           <EndpointIcon kind={kind} />
         </span>
         <div className="min-w-0 flex-1 overflow-hidden pt-0.5">
-          <p className={`m-0 text-[14px] leading-5 font-medium ${statusClass}`}>{label}</p>
-          {serverWarning && !muted ? (
-            <ScrollingLine
-              text={detail}
-              className={`text-[13px] leading-5 ${detailClass}`}
-              title={detailTitle}
-            />
-          ) : (
-            <p
-              className={`mt-0.5 min-h-5 truncate text-[13px] leading-5 ${showPing ? 'font-mono' : ''} ${detailClass}`}
-              title={detailTitle}
-            >
-              {detail}
-            </p>
-          )}
+          <p className={`m-0 text-[14px] leading-5 font-medium ${statusClass}`} title={statusHint}>
+            {label}
+          </p>
+          <p
+            className={`mt-0.5 min-h-5 truncate text-[13px] leading-5 ${showPing && !showUnstable ? 'font-mono' : ''} ${detailClass}`}
+            title={detailTitle}
+          >
+            {detail}
+          </p>
         </div>
       </div>
-      {kind === 'link' && result?.error && !muted && (
-        <p className="mt-2 pl-[3.25rem] text-[13px] leading-relaxed text-amber-300">{result.error}</p>
-      )}
     </div>
   )
 }
@@ -944,44 +961,63 @@ function MonitoringObjectCard({
   object,
   results,
   latencyHistory,
-  checking,
+  linkStatusHistory,
+  checkingLink,
+  checkingServer,
   serverVersion,
   serverVersionError,
   camerasPreviewLoading,
   megaphonesStatusLoading,
+  camerasMetricFailed,
+  megaphonesMetricFailed,
+  now,
   onEdit
 }: {
   object: MonitoringObject
   results: ResultMap
   latencyHistory: LatencyHistoryMap
-  checking: boolean
+  linkStatusHistory: LinkStatusHistoryMap
+  checkingLink: boolean
+  checkingServer: boolean
   serverVersion: string | null
   serverVersionError: string | null
   camerasPreviewLoading: boolean
   megaphonesStatusLoading: boolean
+  camerasMetricFailed: boolean
+  megaphonesMetricFailed: boolean
+  now: number
   onEdit: (id: string) => void
 }) {
   const linkResult = results[targetId(object.id, 'link')]
   const serverResult = results[targetId(object.id, 'server')]
   const linkAverageLatencyMs = averageLatency(latencyHistory[targetId(object.id, 'link')])
+  const linkUnstable = isLinkUnstable(linkStatusHistory[targetId(object.id, 'link')], now)
   const linkOnline = isOnline(linkResult)
   const serverOnline = linkOnline && isOnline(serverResult)
   const camerasTotal = object.camerasTotal ?? object.cameraStreams?.length ?? 0
   const hasCameraOnline = object.camerasOnline !== undefined
   const awaitingFirstCameraPreview =
+    linkOnline && serverOnline && camerasTotal > 0 && !hasCameraOnline && camerasPreviewLoading
+  const camerasFailed =
     linkOnline &&
     serverOnline &&
     camerasTotal > 0 &&
     !hasCameraOnline &&
-    (camerasPreviewLoading || Boolean(object.cameraStreams?.length))
+    !camerasPreviewLoading &&
+    camerasMetricFailed
   const megaphonesTotal = object.megaphonesTotal ?? 0
   const hasMegaphoneOnline = object.megaphonesOnline !== undefined
   const awaitingFirstMegaphoneStatus =
+    linkOnline && serverOnline && megaphonesTotal > 0 && !hasMegaphoneOnline && megaphonesStatusLoading
+  const megaphonesFailed =
     linkOnline &&
     serverOnline &&
     megaphonesTotal > 0 &&
     !hasMegaphoneOnline &&
-    (megaphonesStatusLoading || object.megaphonesTotal !== undefined)
+    !megaphonesStatusLoading &&
+    megaphonesMetricFailed
+  const metricsDegraded =
+    serverOnline && (camerasFailed || megaphonesFailed || Boolean(serverVersionError))
 
   return (
     <Card
@@ -1003,17 +1039,19 @@ function MonitoringObjectCard({
             label="Связь"
             host={object.linkHost}
             result={linkResult}
-            checking={checking}
+            checking={checkingLink}
             kind="link"
             averageLatencyMs={linkAverageLatencyMs}
+            unstable={linkUnstable}
           />
           <EndpointStatus
             label="Сервер"
             host={object.serverHost}
             result={serverResult}
-            checking={checking}
+            checking={checkingServer}
             kind="server"
             muted={!linkOnline}
+            degraded={metricsDegraded}
             serverVersion={serverVersion}
             serverVersionError={linkOnline ? serverVersionError : null}
           />
@@ -1027,8 +1065,9 @@ function MonitoringObjectCard({
               total={camerasTotal}
               icon={<CamerasIcon />}
               muted={!serverOnline && !awaitingFirstCameraPreview}
-              onlineUnknown={!linkOnline || (!hasCameraOnline && !awaitingFirstCameraPreview)}
+              onlineUnknown={!linkOnline || (!hasCameraOnline && !awaitingFirstCameraPreview && !camerasFailed)}
               loading={awaitingFirstCameraPreview}
+              failed={camerasFailed}
             />
             <ObjectMetricStatus
               label="Рупора"
@@ -1036,8 +1075,11 @@ function MonitoringObjectCard({
               total={megaphonesTotal}
               icon={<HornsIcon />}
               muted={!serverOnline && !awaitingFirstMegaphoneStatus}
-              onlineUnknown={!linkOnline || (!hasMegaphoneOnline && !awaitingFirstMegaphoneStatus)}
+              onlineUnknown={
+                !linkOnline || (!hasMegaphoneOnline && !awaitingFirstMegaphoneStatus && !megaphonesFailed)
+              }
               loading={awaitingFirstMegaphoneStatus}
+              failed={megaphonesFailed}
             />
           </div>
         </div>
@@ -1051,16 +1093,24 @@ export function Monitoring() {
   const [editor, setEditor] = useState<EditorState>(null)
   const [results, setResults] = useState<ResultMap>({})
   const [latencyHistory, setLatencyHistory] = useState<LatencyHistoryMap>({})
+  const [linkStatusHistory, setLinkStatusHistory] = useState<LinkStatusHistoryMap>({})
   const [serverVersionErrors, setServerVersionErrors] = useState<VersionErrorMap>({})
-  const [camerasPreviewLoading, setCamerasPreviewLoading] = useState<Record<string, boolean>>({})
-  const [megaphonesStatusLoading, setMegaphonesStatusLoading] = useState<Record<string, boolean>>({})
-  const [refreshing, setRefreshing] = useState(false)
+  const [camerasPreviewLoading, setCamerasPreviewLoading] = useState<IdFlagMap>({})
+  const [megaphonesStatusLoading, setMegaphonesStatusLoading] = useState<IdFlagMap>({})
+  const [camerasMetricFailed, setCamerasMetricFailed] = useState<IdFlagMap>({})
+  const [megaphonesMetricFailed, setMegaphonesMetricFailed] = useState<IdFlagMap>({})
+  const [linkChecking, setLinkChecking] = useState<IdFlagMap>({})
+  const [serverChecking, setServerChecking] = useState<IdFlagMap>({})
+  /** Forces card re-render so link-stability window updates even when no probes are due. */
+  const [uiClock, setUiClock] = useState(() => Date.now())
   const refreshingRef = useRef(false)
   const bootstrapInFlightRef = useRef(new Set<string>())
   const previewInFlightRef = useRef(new Set<string>())
   const megaphoneStatusInFlightRef = useRef(new Set<string>())
   const scheduleRef = useRef<Record<string, ObjectProbeSchedule>>({})
   const credentialKeyRef = useRef<Record<string, string>>({})
+  /** Bumped to ignore late IPC responses after link/server drop. */
+  const probeEpochRef = useRef<Record<string, number>>({})
   const mountedRef = useRef(true)
   const snapshotRef = useRef(snapshot)
   const resultsRef = useRef(results)
@@ -1074,12 +1124,27 @@ export function Monitoring() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!snapshot.objects.length) return
+    const timer = window.setInterval(() => setUiClock(Date.now()), MONITORING_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [snapshot.objects.length])
+
   const getSchedule = useCallback((objectId: string): ObjectProbeSchedule => {
     const current = scheduleRef.current[objectId]
     if (current) return current
     const created = createProbeSchedule()
     scheduleRef.current[objectId] = created
     return created
+  }, [])
+
+  const bumpProbeEpoch = useCallback((objectId: string) => {
+    probeEpochRef.current[objectId] = (probeEpochRef.current[objectId] ?? 0) + 1
+    previewInFlightRef.current.delete(objectId)
+    megaphoneStatusInFlightRef.current.delete(objectId)
+    bootstrapInFlightRef.current.delete(objectId)
+    setCamerasPreviewLoading((prev) => clearIdFlag(prev, objectId))
+    setMegaphonesStatusLoading((prev) => clearIdFlag(prev, objectId))
   }, [])
 
   const editingObject = useMemo(
@@ -1128,6 +1193,7 @@ export function Monitoring() {
 
     if (bootstrapInFlightRef.current.has(object.id)) return
     bootstrapInFlightRef.current.add(object.id)
+    const epoch = probeEpochRef.current[object.id] ?? 0
 
     const schedule = getSchedule(object.id)
     const auth = {
@@ -1140,19 +1206,34 @@ export function Monitoring() {
     try {
       console.log('[monitoring] bootstrap start', object.id, object.serverHost)
       const now = Date.now()
+      let streamsOk = Boolean(object.cameraStreams?.length)
+      let megaphonesOk = object.megaphonesTotal !== undefined
+
+      // Warm-start from cache so metrics can run while lists refresh.
+      if (streamsOk) {
+        schedule.streamsReady = true
+        if (schedule.nextPreviewAt === 0) schedule.nextPreviewAt = now
+      }
+      if (megaphonesOk) {
+        schedule.megaphonesReady = true
+        if (schedule.nextMegaphoneStatusAt === 0) schedule.nextMegaphoneStatusAt = now
+      }
+
       const needVersion = !object.serverVersion
       const needStreams =
         forceStreams ||
         !object.cameraStreams?.length ||
-        (schedule.lastStreamsAt > 0 && now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS)
+        schedule.lastStreamsAt === 0 ||
+        now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS
       const needMegaphones =
         forceStreams ||
         object.megaphonesTotal === undefined ||
-        (schedule.lastMegaphonesAt > 0 && now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS)
+        schedule.lastMegaphonesAt === 0 ||
+        now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS
 
       if (needVersion) {
         const versionResult = await fetchVersion(auth)
-        if (!mountedRef.current) return
+        if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
 
         if (!versionResult.ok || !versionResult.version) {
           setServerVersionErrors((prev) => ({
@@ -1176,11 +1257,20 @@ export function Monitoring() {
 
       if (needStreams) {
         const streamsResult = await fetchStreams(auth)
-        if (!mountedRef.current) return
+        if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
 
         if (!streamsResult.ok) {
           console.warn('[monitoring] streams failed', object.id, streamsResult.error)
+          if (object.cameraStreams?.length) {
+            streamsOk = true
+            schedule.streamsReady = true
+            if (schedule.lastStreamsAt === 0) schedule.lastStreamsAt = now
+          } else {
+            streamsOk = false
+            schedule.streamsReady = false
+          }
         } else {
+          streamsOk = true
           setServerVersionErrors((prev) => {
             if (!(object.id in prev)) return prev
             const next = { ...prev }
@@ -1188,6 +1278,7 @@ export function Monitoring() {
             return next
           })
           schedule.lastStreamsAt = now
+          schedule.streamsReady = true
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
@@ -1204,7 +1295,12 @@ export function Monitoring() {
             const latest = snapshotRef.current.objects.find((item) => item.id === object.id)
             if (!latest?.serverVersion) {
               const retryVersion = await fetchVersion(auth)
-              if (mountedRef.current && retryVersion.ok && retryVersion.version) {
+              if (
+                mountedRef.current &&
+                (probeEpochRef.current[object.id] ?? 0) === epoch &&
+                retryVersion.ok &&
+                retryVersion.version
+              ) {
                 setSnapshot((prev) => ({
                   objects: prev.objects.map((item) =>
                     item.id === object.id ? { ...item, serverVersion: retryVersion.version! } : item
@@ -1214,18 +1310,26 @@ export function Monitoring() {
             }
           }
         }
-      } else if (object.cameraStreams?.length && schedule.lastStreamsAt === 0) {
-        schedule.lastStreamsAt = now
       }
 
       if (needMegaphones) {
         const megaphonesResult = await fetchMegaphones(auth)
-        if (!mountedRef.current) return
+        if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
 
         if (!megaphonesResult.ok) {
           console.warn('[monitoring] megaphones failed', object.id, megaphonesResult.error)
+          if (object.megaphonesTotal !== undefined) {
+            megaphonesOk = true
+            schedule.megaphonesReady = true
+            if (schedule.lastMegaphonesAt === 0) schedule.lastMegaphonesAt = now
+          } else {
+            megaphonesOk = false
+            schedule.megaphonesReady = false
+          }
         } else {
+          megaphonesOk = true
           schedule.lastMegaphonesAt = now
+          schedule.megaphonesReady = true
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
@@ -1238,13 +1342,17 @@ export function Monitoring() {
             )
           }))
         }
-      } else if (object.megaphonesTotal !== undefined && schedule.lastMegaphonesAt === 0) {
-        schedule.lastMegaphonesAt = now
       }
 
-      schedule.bootstrapped = true
-      if (schedule.nextPreviewAt === 0) schedule.nextPreviewAt = now
-      if (schedule.nextMegaphoneStatusAt === 0) schedule.nextMegaphoneStatusAt = now
+      // Arm metric ticks only for successfully bootstrapped parts.
+      if (streamsOk) {
+        schedule.streamsReady = true
+        if (schedule.nextPreviewAt === 0) schedule.nextPreviewAt = now
+      }
+      if (megaphonesOk) {
+        schedule.megaphonesReady = true
+        if (schedule.nextMegaphoneStatusAt === 0) schedule.nextMegaphoneStatusAt = now
+      }
     } finally {
       bootstrapInFlightRef.current.delete(object.id)
     }
@@ -1254,7 +1362,6 @@ export function Monitoring() {
     if (!snapshotRef.current.objects.length || refreshingRef.current) return
 
     refreshingRef.current = true
-    setRefreshing(true)
 
     try {
       if (!window.api) return
@@ -1266,71 +1373,112 @@ export function Monitoring() {
       for (const id of Object.keys(scheduleRef.current)) {
         if (!liveIds.has(id)) delete scheduleRef.current[id]
       }
+      for (const id of Object.keys(probeEpochRef.current)) {
+        if (!liveIds.has(id)) delete probeEpochRef.current[id]
+      }
+
+      const catchUp = needsProbeCatchUp(objects, resultsRef.current)
+      const linkLimit = linkBatchLimit(catchUp)
+      const serverLimit = serverBatchLimit(catchUp)
 
       const dueLinks = objects
         .filter((object) => getSchedule(object.id).nextLinkAt <= now)
-        .sort((a, b) => getSchedule(a.id).nextLinkAt - getSchedule(b.id).nextLinkAt)
-        .slice(0, MONITORING_MAX_LINK_BATCH)
+        .sort((a, b) => {
+          const aFirst = resultsRef.current[targetId(a.id, 'link')] ? 1 : 0
+          const bFirst = resultsRef.current[targetId(b.id, 'link')] ? 1 : 0
+          if (aFirst !== bFirst) return aFirst - bFirst
+          return getSchedule(a.id).nextLinkAt - getSchedule(b.id).nextLinkAt
+        })
+        .slice(0, linkLimit)
 
       const mergedResults: ResultMap = { ...resultsRef.current }
 
       if (dueLinks.length) {
-        const linkTargets: MonitoringPingTarget[] = dueLinks.map((object) => ({
-          id: targetId(object.id, 'link'),
-          label: `${object.code} связь`,
-          host: object.linkHost
-        }))
+        const linkIds = dueLinks.map((object) => object.id)
+        setLinkChecking(setIdFlags(linkIds, true))
 
-        const linkResults = await window.api.monitoringPing(linkTargets)
-        const offlineServers: MonitoringPingResult[] = []
+        try {
+          const linkTargets: MonitoringPingTarget[] = dueLinks.map((object) => ({
+            id: targetId(object.id, 'link'),
+            label: `${object.code} связь`,
+            host: object.linkHost
+          }))
 
-        linkResults.forEach((result) => {
-          mergedResults[result.id] = result
-          const objectId = result.id.replace(/:link$/, '')
-          const object = objects.find((item) => item.id === objectId)
-          const schedule = getSchedule(objectId)
-          if (result.status === 'online') {
-            schedule.linkFailures = 0
-            schedule.nextLinkAt = now + successDelayMs(MONITORING_LINK_INTERVAL_MS)
-            if (schedule.nextServerAt === 0 || schedule.nextServerAt > now + MONITORING_SERVER_INTERVAL_MS) {
-              schedule.nextServerAt = now
-            }
-          } else {
-            schedule.linkFailures += 1
-            schedule.nextLinkAt = now + linkFailureBackoffMs(schedule.linkFailures)
-            schedule.nextServerAt = Number.MAX_SAFE_INTEGER
-            const serverResult: MonitoringPingResult = {
-              id: targetId(objectId, 'server'),
-              host: object?.serverHost ?? '',
-              label: `${object?.code ?? ''} сервер`,
-              status: 'offline',
-              latencyMs: null,
-              checkedAt: now
-            }
-            mergedResults[serverResult.id] = serverResult
-            offlineServers.push(serverResult)
-          }
-        })
+          const linkResults = await window.api.monitoringPing(linkTargets)
+          const offlineServers: MonitoringPingResult[] = []
 
-        setResults((prev) => {
-          const next = { ...prev }
           linkResults.forEach((result) => {
-            next[result.id] = result
+            mergedResults[result.id] = result
+            const objectId = result.id.replace(/:link$/, '')
+            const object = objects.find((item) => item.id === objectId)
+            const schedule = getSchedule(objectId)
+            if (result.status === 'online') {
+              schedule.linkFailures = 0
+              schedule.nextLinkAt = now + successDelayMs(MONITORING_LINK_INTERVAL_MS)
+              if (schedule.nextServerAt === 0 || schedule.nextServerAt > now + MONITORING_SERVER_INTERVAL_MS) {
+                schedule.nextServerAt = now
+              }
+            } else {
+              schedule.linkFailures += 1
+              schedule.nextLinkAt = now + linkFailureBackoffMs(schedule.linkFailures)
+              schedule.nextServerAt = Number.MAX_SAFE_INTEGER
+              bumpProbeEpoch(objectId)
+              const serverResult: MonitoringPingResult = {
+                id: targetId(objectId, 'server'),
+                host: object?.serverHost ?? '',
+                label: `${object?.code ?? ''} сервер`,
+                status: 'offline',
+                latencyMs: null,
+                checkedAt: now
+              }
+              mergedResults[serverResult.id] = serverResult
+              offlineServers.push(serverResult)
+            }
           })
-          offlineServers.forEach((result) => {
-            next[result.id] = result
+
+          setResults((prev) => {
+            const next = { ...prev }
+            linkResults.forEach((result) => {
+              next[result.id] = result
+            })
+            offlineServers.forEach((result) => {
+              next[result.id] = result
+            })
+            return next
           })
-          return next
-        })
-        setLatencyHistory((prev) => {
-          let next = prev
-          linkResults.forEach((result) => {
-            if (result.status !== 'online' || result.latencyMs === null) return
-            if (next === prev) next = { ...prev }
-            next[result.id] = [...(next[result.id] ?? []), result.latencyMs].slice(-LINK_LATENCY_HISTORY_LIMIT)
+          setLatencyHistory((prev) => {
+            let next = prev
+            linkResults.forEach((result) => {
+              if (result.status !== 'online' || result.latencyMs === null) return
+              if (next === prev) next = { ...prev }
+              next[result.id] = [...(next[result.id] ?? []), result.latencyMs].slice(-LINK_LATENCY_HISTORY_LIMIT)
+            })
+            return next
           })
-          return next
-        })
+          setLinkStatusHistory((prev) => {
+            let next = prev
+            linkResults.forEach((result) => {
+              if (result.status !== 'online' && result.status !== 'offline' && result.status !== 'error') return
+              if (next === prev) next = { ...prev }
+              next[result.id] = appendLinkStatusSample(
+                next[result.id],
+                result.status === 'online',
+                result.checkedAt || now
+              )
+            })
+            return next
+          })
+        } finally {
+          setLinkChecking((prev) => {
+            let next = prev
+            linkIds.forEach((id) => {
+              if (!(id in next)) return
+              if (next === prev) next = { ...prev }
+              delete next[id]
+            })
+            return next
+          })
+        }
       }
 
       const dueServers = objects
@@ -1339,123 +1487,152 @@ export function Monitoring() {
           if (schedule.nextServerAt > now) return false
           return isOnline(mergedResults[targetId(object.id, 'link')])
         })
-        .sort((a, b) => getSchedule(a.id).nextServerAt - getSchedule(b.id).nextServerAt)
-        .slice(0, MONITORING_MAX_SERVER_BATCH)
+        .sort((a, b) => {
+          const aFirst = mergedResults[targetId(a.id, 'server')] ? 1 : 0
+          const bFirst = mergedResults[targetId(b.id, 'server')] ? 1 : 0
+          if (aFirst !== bFirst) return aFirst - bFirst
+          return getSchedule(a.id).nextServerAt - getSchedule(b.id).nextServerAt
+        })
+        .slice(0, serverLimit)
 
       if (dueServers.length) {
-        // ICMP first: host may be reachable while OWL.Guard HTTP is down.
-        const serverPingTargets: MonitoringPingTarget[] = dueServers.map((object) => ({
-          id: targetId(object.id, 'server'),
-          label: `${object.code} сервер`,
-          host: object.serverHost
-        }))
-        const serverPingResults = await window.api.monitoringPing(serverPingTargets)
-        const pingOnlineServers = dueServers.filter((_, index) => serverPingResults[index]?.status === 'online')
+        const serverIds = dueServers.map((object) => object.id)
+        setServerChecking(setIdFlags(serverIds, true))
 
-        const httpTargets: MonitoringHttpTarget[] = pingOnlineServers.map((object) => ({
-          id: targetId(object.id, 'server'),
-          host: object.serverHost,
-          label: `${object.code} сервер`
-        }))
-
-        const httpProbe = window.api.monitoringHttpProbe
-        const httpProbeAvailable = typeof httpProbe === 'function'
-        const httpResults: Array<{ id: string; ok: boolean }> =
-          httpTargets.length && httpProbeAvailable
-            ? await httpProbe(httpTargets)
-            : httpTargets.map((target) => ({ id: target.id, ok: true }))
-        const httpOkById = new Map<string, boolean>(httpResults.map((result) => [result.id, result.ok]))
-
-        const serverResults: MonitoringPingResult[] = serverPingResults.map((pingResult, index) => {
-          const object = dueServers[index]
-          if (pingResult.status !== 'online') {
-            return {
-              id: pingResult.id,
-              host: object.serverHost,
-              label: `${object.code} сервер`,
-              status: 'offline' as const,
-              latencyMs: null,
-              checkedAt: now
-            }
-          }
-
-          if (!httpProbeAvailable) {
-            return {
-              id: pingResult.id,
-              host: object.serverHost,
-              label: `${object.code} сервер`,
-              status: 'online' as const,
-              latencyMs: pingResult.latencyMs,
-              checkedAt: now
-            }
-          }
-
-          const httpOk = httpOkById.get(pingResult.id) === true
-          return {
-            id: pingResult.id,
-            host: object.serverHost,
+        try {
+          // ICMP first: host may be reachable while OWL.Guard HTTP is down.
+          const serverPingTargets: MonitoringPingTarget[] = dueServers.map((object) => ({
+            id: targetId(object.id, 'server'),
             label: `${object.code} сервер`,
-            status: (httpOk ? 'online' : 'error') as MonitoringPingStatus,
-            latencyMs: pingResult.latencyMs,
-            checkedAt: now,
-            error: httpOk ? undefined : OWL_GUARD_UNREACHABLE
-          }
-        })
+            host: object.serverHost
+          }))
+          const serverPingResults = await window.api.monitoringPing(serverPingTargets)
+          const pingOnlineServers = dueServers.filter((_, index) => serverPingResults[index]?.status === 'online')
 
-        setResults((prev) => {
-          const next = { ...prev }
-          serverResults.forEach((result) => {
-            next[result.id] = result
+          const httpTargets: MonitoringHttpTarget[] = pingOnlineServers.map((object) => ({
+            id: targetId(object.id, 'server'),
+            host: object.serverHost,
+            label: `${object.code} сервер`
+          }))
+
+          const httpProbe = window.api.monitoringHttpProbe
+          const httpProbeAvailable = typeof httpProbe === 'function'
+          const httpResults: Array<{ id: string; ok: boolean }> =
+            httpTargets.length && httpProbeAvailable
+              ? await httpProbe(httpTargets)
+              : httpTargets.map((target) => ({ id: target.id, ok: true }))
+          const httpOkById = new Map<string, boolean>(httpResults.map((result) => [result.id, result.ok]))
+
+          const serverResults: MonitoringPingResult[] = serverPingResults.map((pingResult, index) => {
+            const object = dueServers[index]
+            if (pingResult.status !== 'online') {
+              return {
+                id: pingResult.id,
+                host: object.serverHost,
+                label: `${object.code} сервер`,
+                status: 'offline' as const,
+                latencyMs: null,
+                checkedAt: now
+              }
+            }
+
+            if (!httpProbeAvailable) {
+              return {
+                id: pingResult.id,
+                host: object.serverHost,
+                label: `${object.code} сервер`,
+                status: 'online' as const,
+                latencyMs: pingResult.latencyMs,
+                checkedAt: now
+              }
+            }
+
+            const httpOk = httpOkById.get(pingResult.id) === true
+            return {
+              id: pingResult.id,
+              host: object.serverHost,
+              label: `${object.code} сервер`,
+              status: (httpOk ? 'online' : 'error') as MonitoringPingStatus,
+              latencyMs: pingResult.latencyMs,
+              checkedAt: now,
+              error: httpOk ? undefined : OWL_GUARD_UNREACHABLE
+            }
           })
-          return next
-        })
 
-        for (let index = 0; index < dueServers.length; index += 1) {
-          const object = dueServers[index]
-          const result = serverResults[index]
-          const schedule = getSchedule(object.id)
-          const credKey = versionFetchKey(object)
-          if (credentialKeyRef.current[object.id] !== credKey) {
-            credentialKeyRef.current[object.id] = credKey
-            schedule.bootstrapped = false
-            schedule.lastStreamsAt = 0
-            schedule.lastMegaphonesAt = 0
-            schedule.nextPreviewAt = 0
-            schedule.nextMegaphoneStatusAt = 0
-          }
+          setResults((prev) => {
+            const next = { ...prev }
+            serverResults.forEach((result) => {
+              next[result.id] = result
+            })
+            return next
+          })
 
-          if (result.status === 'offline') {
-            schedule.serverFailures += 1
-            schedule.nextServerAt = now + failureBackoffMs(schedule.serverFailures, MONITORING_SERVER_INTERVAL_MS)
-            continue
-          }
+          for (let index = 0; index < dueServers.length; index += 1) {
+            const object = dueServers[index]
+            const result = serverResults[index]
+            const schedule = getSchedule(object.id)
+            const credKey = versionFetchKey(object)
+            if (credentialKeyRef.current[object.id] !== credKey) {
+              credentialKeyRef.current[object.id] = credKey
+              schedule.streamsReady = false
+              schedule.megaphonesReady = false
+              schedule.lastStreamsAt = 0
+              schedule.lastMegaphonesAt = 0
+              schedule.nextPreviewAt = 0
+              schedule.nextMegaphoneStatusAt = 0
+              bumpProbeEpoch(object.id)
+            }
 
-          // Ping ok (OWL up or only HTTP down) — keep regular interval; no ICMP backoff.
-          schedule.serverFailures = 0
-          schedule.nextServerAt = now + successDelayMs(MONITORING_SERVER_INTERVAL_MS)
+            if (result.status === 'offline') {
+              schedule.serverFailures += 1
+              schedule.nextServerAt = now + failureBackoffMs(schedule.serverFailures, MONITORING_SERVER_INTERVAL_MS)
+              bumpProbeEpoch(object.id)
+              continue
+            }
 
-          if (result.status === 'online') {
-            const streamsStale =
-              schedule.lastStreamsAt > 0 && now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS
-            const megaphonesStale =
-              schedule.lastMegaphonesAt > 0 && now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS
-            const needBootstrap =
-              !schedule.bootstrapped ||
-              streamsStale ||
-              megaphonesStale ||
-              !object.serverVersion ||
-              object.megaphonesTotal === undefined
-            if (needBootstrap) {
-              void runBootstrap(object, streamsStale || megaphonesStale)
+            if (result.status === 'error') {
+              bumpProbeEpoch(object.id)
+            }
+
+            // Ping ok (OWL up or only HTTP down) — keep regular interval; no ICMP backoff.
+            schedule.serverFailures = 0
+            schedule.nextServerAt = now + successDelayMs(MONITORING_SERVER_INTERVAL_MS)
+
+            if (result.status === 'online') {
+              const streamsStale =
+                schedule.lastStreamsAt > 0 && now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS
+              const megaphonesStale =
+                schedule.lastMegaphonesAt > 0 && now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS
+              const needBootstrap =
+                !schedule.streamsReady ||
+                !schedule.megaphonesReady ||
+                schedule.lastStreamsAt === 0 ||
+                schedule.lastMegaphonesAt === 0 ||
+                streamsStale ||
+                megaphonesStale ||
+                !object.serverVersion ||
+                object.megaphonesTotal === undefined
+              if (needBootstrap) {
+                void runBootstrap(object, streamsStale || megaphonesStale)
+              }
             }
           }
+        } finally {
+          setServerChecking((prev) => {
+            let next = prev
+            serverIds.forEach((id) => {
+              if (!(id in next)) return
+              if (next === prev) next = { ...prev }
+              delete next[id]
+            })
+            return next
+          })
         }
       }
     } finally {
       refreshingRef.current = false
-      setRefreshing(false)
     }
-  }, [getSchedule, runBootstrap])
+  }, [bumpProbeEpoch, getSchedule, runBootstrap])
 
   useEffect(() => {
     if (!snapshot.objects.length) return
@@ -1466,7 +1643,8 @@ export function Monitoring() {
     const run = async (): Promise<void> => {
       await refresh()
       if (cancelled) return
-      timer = window.setTimeout(run, MONITORING_TICK_MS)
+      const catchUp = needsProbeCatchUp(snapshotRef.current.objects, resultsRef.current)
+      timer = window.setTimeout(run, schedulerTickMs(catchUp))
     }
 
     void run()
@@ -1481,31 +1659,43 @@ export function Monitoring() {
     const previewCameras = window.api?.monitoringPreviewCameras
     if (typeof previewCameras !== 'function') return
 
+    let cancelled = false
+    let timer: number | undefined
+
     const runPreviewTick = (): void => {
+      if (cancelled) return
       const now = Date.now()
+      const catchUp = needsMetricsCatchUp(snapshotRef.current.objects, resultsRef.current)
       const due = snapshotRef.current.objects
         .filter((object) => {
           if (previewInFlightRef.current.has(object.id)) return false
           if (!object.serverPassword) return false
+          if (!isOnline(resultsRef.current[targetId(object.id, 'link')])) return false
           if (!isOnline(resultsRef.current[targetId(object.id, 'server')])) return false
           const streamIds = object.cameraStreams?.map((stream) => stream.id) ?? []
           if (!streamIds.length) return false
           const schedule = getSchedule(object.id)
-          if (!schedule.bootstrapped) return false
+          if (!schedule.streamsReady) return false
           return schedule.nextPreviewAt <= now
         })
-        .sort((a, b) => getSchedule(a.id).nextPreviewAt - getSchedule(b.id).nextPreviewAt)
-        .slice(0, MONITORING_MAX_PREVIEW_BATCH)
+        .sort((a, b) => {
+          const aFirst = a.camerasOnline === undefined ? 0 : 1
+          const bFirst = b.camerasOnline === undefined ? 0 : 1
+          if (aFirst !== bFirst) return aFirst - bFirst
+          return getSchedule(a.id).nextPreviewAt - getSchedule(b.id).nextPreviewAt
+        })
+        .slice(0, previewBatchLimit(catchUp))
 
       due.forEach((object) => {
         const streamIds = object.cameraStreams?.map((stream) => stream.id).filter((id) => Number.isFinite(id)) ?? []
         const schedule = getSchedule(object.id)
         const isFirstPreview = object.camerasOnline === undefined
+        const epoch = probeEpochRef.current[object.id] ?? 0
         previewInFlightRef.current.add(object.id)
-        // Reserve next slot immediately so the tick does not re-pick this object.
         schedule.nextPreviewAt = now + successDelayMs(MONITORING_PREVIEW_INTERVAL_MS)
 
         if (isFirstPreview) {
+          setCamerasMetricFailed((prev) => clearIdFlag(prev, object.id))
           setCamerasPreviewLoading((prev) => (prev[object.id] ? prev : { ...prev, [object.id]: true }))
         }
 
@@ -1519,15 +1709,20 @@ export function Monitoring() {
         })
           .then((result) => {
             if (!mountedRef.current) return
+            if ((probeEpochRef.current[object.id] ?? 0) !== epoch) return
             console.log('[monitoring] preview result', result)
             if (!result.ok) {
               schedule.previewFailures += 1
               schedule.nextPreviewAt = now + failureBackoffMs(schedule.previewFailures, MONITORING_PREVIEW_INTERVAL_MS)
+              if (isFirstPreview) {
+                setCamerasMetricFailed((prev) => ({ ...prev, [object.id]: true }))
+              }
               console.warn('[monitoring] preview failed', object.id, result.error)
               return
             }
 
             schedule.previewFailures = 0
+            setCamerasMetricFailed((prev) => clearIdFlag(prev, object.id))
             setSnapshot((prev) => {
               const current = prev.objects.find((item) => item.id === object.id)
               if (!current) return prev
@@ -1540,48 +1735,62 @@ export function Monitoring() {
             })
           })
           .finally(() => {
+            if ((probeEpochRef.current[object.id] ?? 0) !== epoch) return
             previewInFlightRef.current.delete(object.id)
-            setCamerasPreviewLoading((prev) => {
-              if (!(object.id in prev)) return prev
-              const next = { ...prev }
-              delete next[object.id]
-              return next
-            })
+            setCamerasPreviewLoading((prev) => clearIdFlag(prev, object.id))
           })
       })
+
+      if (cancelled) return
+      timer = window.setTimeout(runPreviewTick, schedulerTickMs(catchUp || due.length > 0))
     }
 
     runPreviewTick()
-    const timer = window.setInterval(runPreviewTick, MONITORING_TICK_MS)
-    return () => window.clearInterval(timer)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [getSchedule, objectsKey])
 
   useEffect(() => {
     const fetchMegaphoneStatuses = window.api?.monitoringFetchMegaphoneStatuses
     if (typeof fetchMegaphoneStatuses !== 'function') return
 
+    let cancelled = false
+    let timer: number | undefined
+
     const runMegaphoneStatusTick = (): void => {
+      if (cancelled) return
       const now = Date.now()
+      const catchUp = needsMetricsCatchUp(snapshotRef.current.objects, resultsRef.current)
       const due = snapshotRef.current.objects
         .filter((object) => {
           if (megaphoneStatusInFlightRef.current.has(object.id)) return false
           if (!object.serverPassword) return false
+          if (!isOnline(resultsRef.current[targetId(object.id, 'link')])) return false
           if (!isOnline(resultsRef.current[targetId(object.id, 'server')])) return false
           if ((object.megaphonesTotal ?? 0) <= 0) return false
           const schedule = getSchedule(object.id)
-          if (!schedule.bootstrapped) return false
+          if (!schedule.megaphonesReady) return false
           return schedule.nextMegaphoneStatusAt <= now
         })
-        .sort((a, b) => getSchedule(a.id).nextMegaphoneStatusAt - getSchedule(b.id).nextMegaphoneStatusAt)
-        .slice(0, MONITORING_MAX_PREVIEW_BATCH)
+        .sort((a, b) => {
+          const aFirst = a.megaphonesOnline === undefined ? 0 : 1
+          const bFirst = b.megaphonesOnline === undefined ? 0 : 1
+          if (aFirst !== bFirst) return aFirst - bFirst
+          return getSchedule(a.id).nextMegaphoneStatusAt - getSchedule(b.id).nextMegaphoneStatusAt
+        })
+        .slice(0, previewBatchLimit(catchUp))
 
       due.forEach((object) => {
         const schedule = getSchedule(object.id)
         const isFirstStatus = object.megaphonesOnline === undefined
+        const epoch = probeEpochRef.current[object.id] ?? 0
         megaphoneStatusInFlightRef.current.add(object.id)
         schedule.nextMegaphoneStatusAt = now + successDelayMs(MONITORING_PREVIEW_INTERVAL_MS)
 
         if (isFirstStatus) {
+          setMegaphonesMetricFailed((prev) => clearIdFlag(prev, object.id))
           setMegaphonesStatusLoading((prev) => (prev[object.id] ? prev : { ...prev, [object.id]: true }))
         }
 
@@ -1594,16 +1803,21 @@ export function Monitoring() {
         })
           .then((result) => {
             if (!mountedRef.current) return
+            if ((probeEpochRef.current[object.id] ?? 0) !== epoch) return
             console.log('[monitoring] megaphone statuses result', result)
             if (!result.ok) {
               schedule.megaphoneStatusFailures += 1
               schedule.nextMegaphoneStatusAt =
                 now + failureBackoffMs(schedule.megaphoneStatusFailures, MONITORING_PREVIEW_INTERVAL_MS)
+              if (isFirstStatus) {
+                setMegaphonesMetricFailed((prev) => ({ ...prev, [object.id]: true }))
+              }
               console.warn('[monitoring] megaphone statuses failed', object.id, result.error)
               return
             }
 
             schedule.megaphoneStatusFailures = 0
+            setMegaphonesMetricFailed((prev) => clearIdFlag(prev, object.id))
             setSnapshot((prev) => {
               const current = prev.objects.find((item) => item.id === object.id)
               if (!current || current.megaphonesOnline === result.count) return prev
@@ -1615,58 +1829,58 @@ export function Monitoring() {
             })
           })
           .finally(() => {
+            if ((probeEpochRef.current[object.id] ?? 0) !== epoch) return
             megaphoneStatusInFlightRef.current.delete(object.id)
-            setMegaphonesStatusLoading((prev) => {
-              if (!(object.id in prev)) return prev
-              const next = { ...prev }
-              delete next[object.id]
-              return next
-            })
+            setMegaphonesStatusLoading((prev) => clearIdFlag(prev, object.id))
           })
       })
+
+      if (cancelled) return
+      timer = window.setTimeout(runMegaphoneStatusTick, schedulerTickMs(catchUp || due.length > 0))
     }
 
     runMegaphoneStatusTick()
-    const timer = window.setInterval(runMegaphoneStatusTick, MONITORING_TICK_MS)
-    return () => window.clearInterval(timer)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [getSchedule, objectsKey])
 
-  const clearObjectResults = useCallback((id: string) => {
-    setResults((prev) => {
-      const next = { ...prev }
-      delete next[targetId(id, 'link')]
-      delete next[targetId(id, 'server')]
-      return next
-    })
-    setLatencyHistory((prev) => {
-      const next = { ...prev }
-      delete next[targetId(id, 'link')]
-      return next
-    })
-    setServerVersionErrors((prev) => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    delete scheduleRef.current[id]
-    delete credentialKeyRef.current[id]
-    bootstrapInFlightRef.current.delete(id)
-    previewInFlightRef.current.delete(id)
-    megaphoneStatusInFlightRef.current.delete(id)
-    setCamerasPreviewLoading((prev) => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    setMegaphonesStatusLoading((prev) => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-  }, [])
+  const clearObjectResults = useCallback(
+    (id: string) => {
+      bumpProbeEpoch(id)
+      setResults((prev) => {
+        const next = { ...prev }
+        delete next[targetId(id, 'link')]
+        delete next[targetId(id, 'server')]
+        return next
+      })
+      setLatencyHistory((prev) => {
+        const next = { ...prev }
+        delete next[targetId(id, 'link')]
+        return next
+      })
+      setLinkStatusHistory((prev) => {
+        const next = { ...prev }
+        delete next[targetId(id, 'link')]
+        return next
+      })
+      setServerVersionErrors((prev) => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      setCamerasMetricFailed((prev) => clearIdFlag(prev, id))
+      setMegaphonesMetricFailed((prev) => clearIdFlag(prev, id))
+      setLinkChecking((prev) => clearIdFlag(prev, id))
+      setServerChecking((prev) => clearIdFlag(prev, id))
+      delete scheduleRef.current[id]
+      delete credentialKeyRef.current[id]
+      delete probeEpochRef.current[id]
+    },
+    [bumpProbeEpoch]
+  )
 
   const saveObject = useCallback(
     (next: MonitoringObject, originalId?: string): boolean => {
@@ -1769,11 +1983,16 @@ export function Monitoring() {
               object={object}
               results={results}
               latencyHistory={latencyHistory}
-              checking={refreshing}
+              linkStatusHistory={linkStatusHistory}
+              checkingLink={Boolean(linkChecking[object.id])}
+              checkingServer={Boolean(serverChecking[object.id])}
               serverVersion={object.serverVersion ?? null}
               serverVersionError={serverVersionErrors[object.id] ?? null}
               camerasPreviewLoading={Boolean(camerasPreviewLoading[object.id])}
               megaphonesStatusLoading={Boolean(megaphonesStatusLoading[object.id])}
+              camerasMetricFailed={Boolean(camerasMetricFailed[object.id])}
+              megaphonesMetricFailed={Boolean(megaphonesMetricFailed[object.id])}
+              now={uiClock}
               onEdit={openEditEditor}
             />
           ))}

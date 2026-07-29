@@ -28,8 +28,8 @@ export function setupUpdater(window: BrowserWindow): void {
   if (!ipcRegistered) {
     ipcRegistered = true
 
-    // Скачиваем в фоне; UI показывает тост только после download-complete.
-    autoUpdater.autoDownload = true
+    // Скачивание стартует по кнопке «Обновить» (или тихо при «Позже»).
+    autoUpdater.autoDownload = false
     // На macOS Squirrel должен забрать zip во время downloadUpdate(), иначе quitAndInstall() молча не сработает.
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.autoRunAppAfterInstall = true
