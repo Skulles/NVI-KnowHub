@@ -119,8 +119,10 @@ function normalizeConfigs(value: unknown): SavedMikrotikConfig[] {
         ? item.flow
         : undefined
     const roleConfigs =
-      normalizeRoleConfigs(item.roleConfigs) ??
-      (flow === 'groovea' || !flow ? parseRoleConfigsFromContent(item.content) : undefined)
+      flow === 'lte-ipsec'
+        ? undefined
+        : normalizeRoleConfigs(item.roleConfigs) ??
+          (flow === 'groovea' || !flow ? parseRoleConfigsFromContent(item.content) : undefined)
     const previewCommands =
       typeof item.previewCommands === 'string' && item.previewCommands.trim()
         ? item.previewCommands
@@ -133,6 +135,7 @@ function normalizeConfigs(value: unknown): SavedMikrotikConfig[] {
         : parseHeaderTextFromContent(item.content)
     const resolvedFlow: SavedConfigFlow | undefined =
       flow ?? (roleConfigs ? 'groovea' : previewCommands ? 'lte-ipsec' : undefined)
+    const keepRoleConfigs = resolvedFlow !== 'lte-ipsec' ? roleConfigs : undefined
 
     configs.push({
       id: item.id,
@@ -146,7 +149,7 @@ function normalizeConfigs(value: unknown): SavedMikrotikConfig[] {
       ...(resolvedFlow ? { flow: resolvedFlow } : {}),
       ...(headerText ? { headerText } : {}),
       ...(previewCommands ? { previewCommands } : {}),
-      ...(roleConfigs ? { roleConfigs } : {}),
+      ...(keepRoleConfigs ? { roleConfigs: keepRoleConfigs } : {}),
     })
   }
 
@@ -300,6 +303,9 @@ export function getSavedConfigPreviewText(
 export function getSavedConfigRoles(
   config: SavedMikrotikConfig,
 ): SavedConfigRole[] {
+  // LTE / single-device configs never have AP/Station tabs.
+  if (config.flow === 'lte-ipsec') return []
+
   const fromStored = ROLE_KEYS.filter((role) => Boolean(config.roleConfigs?.[role]))
   if (fromStored.length > 0) return fromStored
 
@@ -309,7 +315,7 @@ export function getSavedConfigRoles(
     if (fromParsed.length > 0) return fromParsed
   }
 
-  return ROLE_KEYS
+  return []
 }
 
 export function getSavedConfigRoleLabels(
@@ -324,5 +330,6 @@ export function getSavedConfigRoleLabels(
 }
 
 export function savedConfigHasRoleTabs(config: SavedMikrotikConfig): boolean {
+  if (config.flow === 'lte-ipsec') return false
   return getSavedConfigRoles(config).length > 1
 }

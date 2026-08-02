@@ -279,6 +279,14 @@ function LoadingState(): React.ReactElement {
 
 export function ContentArea(): React.ReactElement {
   const { selectedItem, articleHtml, loading } = useContentStore()
+  const scrollRootRef = useRef<HTMLElement>(null)
+  const selectionKey = selectedItem?.id ?? null
+
+  useLayoutEffect(() => {
+    const root = scrollRootRef.current
+    if (!root) return
+    root.scrollTop = 0
+  }, [selectionKey])
 
   const articleShowsToc =
     !loading &&
@@ -287,7 +295,10 @@ export function ContentArea(): React.ReactElement {
     articleHasToc(parseArticleHtml(articleHtml).bodyHtml)
 
   return (
-    <main className="relative flex min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-surface-window">
+    <main
+      ref={scrollRootRef}
+      className="relative flex min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-surface-window"
+    >
       <div
         className="pointer-events-none absolute inset-0 bg-[var(--page-glow)]"
         aria-hidden

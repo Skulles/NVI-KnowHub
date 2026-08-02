@@ -25,11 +25,10 @@ import {
   type MonitoringObject
 } from './monitoringStorage'
 import {
-  MONITORING_LINK_INTERVAL_MS,
   MONITORING_PREVIEW_INTERVAL_MS,
   MONITORING_SERVER_INTERVAL_MS,
   MONITORING_STREAMS_REFRESH_MS,
-  MONITORING_TICK_MS,
+  adaptiveIntervalMs,
   appendLinkStatusSample,
   createProbeSchedule,
   failureBackoffMs,
@@ -40,6 +39,7 @@ import {
   schedulerTickMs,
   serverBatchLimit,
   successDelayMs,
+  updateSignalTier,
   type LinkStatusSample,
   type ObjectProbeSchedule
 } from './monitoringSchedule'
@@ -238,8 +238,8 @@ function statusClasses(
 function Card({ title, children, action }: { title: ReactNode; children: ReactNode; action?: ReactNode }) {
   return (
     <section className="group rounded-2xl border border-surface-border bg-surface-card shadow-sheet overflow-hidden">
-      <header className="flex items-center justify-between gap-4 px-5 py-4">
-        <h2 className="m-0 text-[12px] font-semibold uppercase tracking-[0.09em] text-tint-blue">{title}</h2>
+      <header className="flex items-start justify-between gap-4 px-5 py-4">
+        <h2 className="m-0 min-w-0 text-[12px] font-semibold uppercase tracking-[0.09em] text-tint-blue">{title}</h2>
         {action}
       </header>
       <div className="px-5 pb-5 pt-0">{children}</div>
@@ -255,10 +255,12 @@ function ObjectCodeTitle({ code }: { code: string }) {
   }
 
   return (
-    <>
-      <span className="font-normal [font-variation-settings:'wght'_430]">{match[1]}</span>
-      <span className="font-bold [font-variation-settings:'wght'_700]">{match[2]}</span>
-    </>
+    <span className="inline-flex items-baseline">
+      <span className="font-normal tracking-[0.09em] [font-variation-settings:'wght'_430]">{match[1]}</span>
+      <span className="ml-[0.16em] font-bold tracking-[0.12em] [font-variation-settings:'wght'_700]">
+        {match[2]}
+      </span>
+    </span>
   )
 }
 
@@ -269,6 +271,18 @@ function CogIcon() {
         fillRule="evenodd"
         d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567L9.05 4.889c-.02.12-.115.26-.297.348a7.493 7.493 0 0 0-.986.57c-.166.115-.334.126-.45.083L6.3 5.508a1.875 1.875 0 0 0-2.282.819l-.922 1.597a1.875 1.875 0 0 0 .432 2.385l.84.692c.095.078.17.229.154.43a7.598 7.598 0 0 0 0 1.139c.015.2-.059.352-.153.43l-.841.692a1.875 1.875 0 0 0-.432 2.385l.922 1.597a1.875 1.875 0 0 0 2.282.818l1.019-.382c.115-.043.283-.031.45.082.312.214.641.405.985.57.182.088.277.228.297.35l.178 1.071c.151.904.933 1.567 1.85 1.567h1.844c.916 0 1.699-.663 1.85-1.567l.178-1.072c.02-.12.114-.26.297-.349.344-.165.673-.356.985-.57.167-.114.335-.125.45-.082l1.02.382a1.875 1.875 0 0 0 2.28-.819l.923-1.597a1.875 1.875 0 0 0-.432-2.385l-.84-.692c-.095-.078-.17-.229-.154-.43a7.606 7.606 0 0 0 0-1.139c-.016-.2.059-.352.153-.43l.84-.692c.708-.582.891-1.59.433-2.385l-.922-1.597a1.875 1.875 0 0 0-2.282-.818l-1.02.382c-.114.043-.282.031-.449-.083a7.49 7.49 0 0 0-.985-.57c-.183-.087-.277-.227-.297-.348l-.179-1.072a1.875 1.875 0 0 0-1.85-1.567h-1.843ZM12 15.75a3.75 3.75 0 0 1 0-7.5 3.75 3.75 0 0 1 0 7.5Z"
         clipRule="evenodd"
+      />
+    </svg>
+  )
+}
+
+function OpenExternalIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5M15 3h6m0 0v6m0-6L10.5 13.5"
       />
     </svg>
   )
@@ -354,6 +368,130 @@ function ratioStatusClass(online: number, total: number): string {
   return 'text-emerald-400'
 }
 
+/** Stub host metrics until OWL.Guard exposes real CPU/GPU/RAM/uptime. */
+type ServerResourceStubs = {
+  cpuLoad: number
+  cpuTempC: number
+  gpuLoad: number
+  gpuTempC: number
+  ramLoad: number
+  /** Uptime in whole days. */
+  uptimeDays: number
+}
+
+const DEBUG_SERVER_RESOURCES: ServerResourceStubs = {
+  cpuLoad: 48,
+  cpuTempC: 62,
+  gpuLoad: 91,
+  gpuTempC: 88,
+  ramLoad: 42,
+  uptimeDays: 3
+}
+
+/** Alternate CPU/GPU load ↔ temperature in the server caption. */
+const RESOURCE_METRIC_FLIP_MS = 5000
+const RESOURCE_METRIC_FADE_MS = 700
+
+function resourceLoadTextClass(loadPercent: number): string {
+  return loadPercent > 85 ? 'text-red-400' : 'text-label-tertiary'
+}
+
+function resourceTempTextClass(tempC: number): string {
+  return tempC > 85 ? 'text-red-400' : 'text-label-tertiary'
+}
+
+function formatServerResourcesTitle(resources: ServerResourceStubs): string {
+  return `CPU ${Math.round(resources.cpuLoad)}% / ${Math.round(resources.cpuTempC)}°C · GPU ${Math.round(resources.gpuLoad)}% / ${Math.round(resources.gpuTempC)}°C · RAM ${Math.round(resources.ramLoad)}%`
+}
+
+function FlippingMetricValue({
+  loadLabel,
+  tempLabel,
+  showTemp,
+  loadClass,
+  tempClass
+}: {
+  loadLabel: string
+  tempLabel: string
+  showTemp: boolean
+  loadClass: string
+  tempClass: string
+}) {
+  // Fixed slot for up to 3 digits + unit (`100%` / `100°C`), centered so flips don't shift.
+  return (
+    <span className="relative inline-grid w-[5ch] place-items-center text-center tabular-nums">
+      <span
+        className={`col-start-1 row-start-1 transition-[opacity,color] ease-in-out ${loadClass} ${
+          showTemp ? 'opacity-0' : 'opacity-100'
+        }`}
+        style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}
+      >
+        {loadLabel}
+      </span>
+      <span
+        className={`col-start-1 row-start-1 transition-[opacity,color] ease-in-out ${tempClass} ${
+          showTemp ? 'opacity-100' : 'opacity-0'
+        }`}
+        style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}
+      >
+        {tempLabel}
+      </span>
+    </span>
+  )
+}
+
+function ServerResourcesCaption({ resources, now }: { resources: ServerResourceStubs; now: number }) {
+  const showTemp = Math.floor(now / RESOURCE_METRIC_FLIP_MS) % 2 === 1
+  const cpuClass = showTemp
+    ? resourceTempTextClass(resources.cpuTempC)
+    : resourceLoadTextClass(resources.cpuLoad)
+  const gpuClass = showTemp
+    ? resourceTempTextClass(resources.gpuTempC)
+    : resourceLoadTextClass(resources.gpuLoad)
+  const ramClass = resourceLoadTextClass(resources.ramLoad)
+
+  return (
+    <span className="inline-flex max-w-full items-baseline gap-x-1.5 overflow-hidden font-mono text-[12px] leading-4 tracking-tight text-label-tertiary">
+      <span className={`inline-flex shrink-0 items-baseline gap-x-1 transition-colors ease-in-out ${cpuClass}`} style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}>
+        <span>CPU</span>
+        <FlippingMetricValue
+          loadLabel={`${Math.round(resources.cpuLoad)}%`}
+          tempLabel={`${Math.round(resources.cpuTempC)}°C`}
+          showTemp={showTemp}
+          loadClass={resourceLoadTextClass(resources.cpuLoad)}
+          tempClass={resourceTempTextClass(resources.cpuTempC)}
+        />
+      </span>
+      <span className="shrink-0 text-label-tertiary/70" aria-hidden>
+        ·
+      </span>
+      <span className={`inline-flex shrink-0 items-baseline gap-x-1 transition-colors ease-in-out ${gpuClass}`} style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}>
+        <span>GPU</span>
+        <FlippingMetricValue
+          loadLabel={`${Math.round(resources.gpuLoad)}%`}
+          tempLabel={`${Math.round(resources.gpuTempC)}°C`}
+          showTemp={showTemp}
+          loadClass={resourceLoadTextClass(resources.gpuLoad)}
+          tempClass={resourceTempTextClass(resources.gpuTempC)}
+        />
+      </span>
+      <span className="shrink-0 text-label-tertiary/70" aria-hidden>
+        ·
+      </span>
+      <span className={`inline-flex min-w-0 shrink items-baseline gap-x-1 ${ramClass}`}>
+        <span>RAM</span>
+        <span className="tabular-nums">{Math.round(resources.ramLoad)}%</span>
+      </span>
+    </span>
+  )
+}
+
+function formatUptimeDays(days: number | null | undefined): string | null {
+  if (days === null || days === undefined || !Number.isFinite(days)) return null
+  const whole = Math.max(0, Math.floor(days))
+  return `аптайм ${whole}д`
+}
+
 function MetricCountSpinner() {
   return (
     <span
@@ -406,7 +544,7 @@ function ObjectMetricStatus({
         {icon}
       </span>
       <p
-        className={`m-0 flex h-6 items-center font-mono text-[18px] font-semibold leading-6 tracking-tight ${
+        className={`m-0 flex h-6 min-w-0 items-center font-mono text-[18px] font-semibold leading-6 tracking-tight tabular-nums ${
           muted || onlineUnknown || loading || failed || !hasOnlineValue
             ? failed && !muted
               ? 'text-amber-300'
@@ -415,10 +553,11 @@ function ObjectMetricStatus({
         }`}
         title={title}
       >
-        <span className="inline-flex h-6 min-w-[1ch] items-center justify-center">
+        <span className="inline-flex h-6 w-[2ch] shrink-0 items-center justify-end">
           {loading ? <MetricCountSpinner /> : onlineLabel}
         </span>
-        <span>/{total}</span>
+        <span className="shrink-0">/</span>
+        <span className="inline-flex h-6 min-w-[2ch] items-center">{total}</span>
       </p>
     </>
   )
@@ -852,7 +991,9 @@ function EndpointStatus({
   muted = false,
   degraded = false,
   unstable = false,
-  serverVersion = null,
+  serverResources = null,
+  serverResourcesNow = 0,
+  serverUptimeDays = null,
   serverVersionError = null
 }: {
   label: string
@@ -866,7 +1007,11 @@ function EndpointStatus({
   degraded?: boolean
   /** Link recently flapped online↔offline. */
   unstable?: boolean
-  serverVersion?: string | null
+  /** Stub/live CPU/GPU/RAM metrics under «Сервер». */
+  serverResources?: ServerResourceStubs | null
+  serverResourcesNow?: number
+  /** Uptime in days, shown next to «Сервер». */
+  serverUptimeDays?: number | null
   serverVersionError?: string | null
 }) {
   const status = result?.status ?? 'unknown'
@@ -881,7 +1026,10 @@ function EndpointStatus({
   const authOrVersionFailed = kind === 'server' && !muted && !!serverVersionError
   const colorWarning =
     showUnstable || owlGuardFailed || authOrVersionFailed || (degraded && status === 'online')
-  const versionLabel = serverVersion ? formatServerVersionLabel(serverVersion) : null
+  const uptimeLabel =
+    kind === 'server' && !muted && status === 'online' ? formatUptimeDays(serverUptimeDays) : null
+  const showResources = kind === 'server' && !muted && status === 'online' && !!serverResources
+  const resourcesTitle = showResources && serverResources ? formatServerResourcesTitle(serverResources) : null
   // Visible line: factual data, except link flapping — shown in the ping subtitle.
   const detail =
     kind === 'link'
@@ -889,10 +1037,14 @@ function EndpointStatus({
         ? LINK_UNSTABLE
         : showPing
           ? formatLatency(linkLatencyMs)
-          : status === 'online' || checking || status === 'unknown'
-            ? linkConnectionText(status, checking)
+          : linkConnectionText(status, checking)
+      : showResources
+        ? null
+        : serverNoReply
+          ? 'нет ответа'
+          : owlGuardFailed
+            ? OWL_GUARD_UNREACHABLE
             : host
-      : versionLabel || host
   const statusClass = muted
     ? 'text-label-tertiary'
     : colorWarning || serverNoReply
@@ -930,7 +1082,13 @@ function EndpointStatus({
             : authOrVersionFailed
               ? serverVersionError
               : statusText(status, checking, degraded)
-  const detailTitle = [statusHint, showUnstable && showPing ? formatLatency(linkLatencyMs!) : null, versionLabel, host]
+  const detailTitle = [
+    statusHint,
+    uptimeLabel,
+    showUnstable && showPing ? formatLatency(linkLatencyMs!) : null,
+    resourcesTitle,
+    host
+  ]
     .filter((part): part is string => Boolean(part))
     .filter((part, index, all) => all.indexOf(part) === index)
     .join(' · ')
@@ -942,15 +1100,31 @@ function EndpointStatus({
           <EndpointIcon kind={kind} />
         </span>
         <div className="min-w-0 flex-1 overflow-hidden pt-0.5">
-          <p className={`m-0 text-[14px] leading-5 font-medium ${statusClass}`} title={statusHint}>
-            {label}
+          <p className={`m-0 flex min-w-0 items-baseline gap-1.5 text-[14px] leading-5 font-medium ${statusClass}`}>
+            <span className="truncate" title={statusHint}>
+              {label}
+            </span>
+            {uptimeLabel && (
+              <span
+                className="shrink-0 text-[11px] font-normal text-label-tertiary"
+                title={uptimeLabel}
+              >
+                {uptimeLabel}
+              </span>
+            )}
           </p>
-          <p
-            className={`mt-0.5 min-h-5 truncate text-[13px] leading-5 ${showPing && !showUnstable ? 'font-mono' : ''} ${detailClass}`}
+          <div
+            className={`mt-0.5 min-h-4 truncate ${
+              showPing && !showUnstable ? `font-mono text-[13px] leading-5 ${detailClass}` : showResources ? '' : `text-[13px] leading-5 ${detailClass}`
+            }`}
             title={detailTitle}
           >
-            {detail}
-          </p>
+            {showResources && serverResources ? (
+              <ServerResourcesCaption resources={serverResources} now={serverResourcesNow} />
+            ) : (
+              detail
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -966,12 +1140,14 @@ function MonitoringObjectCard({
   checkingServer,
   serverVersion,
   serverVersionError,
+  serverResources = null,
   camerasPreviewLoading,
   megaphonesStatusLoading,
   camerasMetricFailed,
   megaphonesMetricFailed,
   now,
-  onEdit
+  onEdit,
+  debug = false
 }: {
   object: MonitoringObject
   results: ResultMap
@@ -981,12 +1157,14 @@ function MonitoringObjectCard({
   checkingServer: boolean
   serverVersion: string | null
   serverVersionError: string | null
+  serverResources?: ServerResourceStubs | null
   camerasPreviewLoading: boolean
   megaphonesStatusLoading: boolean
   camerasMetricFailed: boolean
   megaphonesMetricFailed: boolean
   now: number
-  onEdit: (id: string) => void
+  onEdit?: (id: string) => void
+  debug?: boolean
 }) {
   const linkResult = results[targetId(object.id, 'link')]
   const serverResult = results[targetId(object.id, 'server')]
@@ -1018,19 +1196,60 @@ function MonitoringObjectCard({
     megaphonesMetricFailed
   const metricsDegraded =
     serverOnline && (camerasFailed || megaphonesFailed || Boolean(serverVersionError))
+  const versionLabel = serverVersion ? formatServerVersionLabel(serverVersion) : null
+  const headerVersion =
+    versionLabel ??
+    (serverVersionError && linkOnline ? serverVersionError : null)
+  const headerVersionError = !versionLabel && Boolean(serverVersionError && linkOnline)
 
   return (
     <Card
-      title={<ObjectCodeTitle code={object.code} />}
+      title={
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-2">
+            <ObjectCodeTitle code={object.code} />
+            {debug && (
+              <span className="rounded-md bg-amber-300/15 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-wide text-amber-300">
+                debug
+              </span>
+            )}
+          </span>
+          {headerVersion && (
+            <span
+              className={`max-w-full truncate text-[12px] font-medium normal-case tracking-normal ${
+                headerVersionError ? 'text-amber-300' : 'text-label-tertiary'
+              }`}
+              title={headerVersion}
+            >
+              {headerVersion}
+            </span>
+          )}
+        </span>
+      }
       action={
-        <button
-          type="button"
-          onClick={() => onEdit(object.id)}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:bg-white/[0.05] hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45"
-          aria-label="Настройки объекта"
-        >
-          <CogIcon />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => {
+              void window.api?.openExternal(`http://${object.serverHost}`)
+            }}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:bg-white/[0.05] hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45"
+            aria-label="Открыть сервер в браузере"
+            title={`Открыть http://${object.serverHost}`}
+          >
+            <OpenExternalIcon />
+          </button>
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={() => onEdit(object.id)}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:bg-white/[0.05] hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45"
+              aria-label="Настройки объекта"
+            >
+              <CogIcon />
+            </button>
+          ) : null}
+        </div>
       }
     >
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch sm:gap-5">
@@ -1052,7 +1271,9 @@ function MonitoringObjectCard({
             kind="server"
             muted={!linkOnline}
             degraded={metricsDegraded}
-            serverVersion={serverVersion}
+            serverResources={serverOnline ? serverResources : null}
+            serverResourcesNow={now}
+            serverUptimeDays={serverOnline ? serverResources?.uptimeDays ?? null : null}
             serverVersionError={linkOnline ? serverVersionError : null}
           />
         </div>
@@ -1088,6 +1309,68 @@ function MonitoringObjectCard({
   )
 }
 
+function mockPingResult(
+  id: string,
+  host: string,
+  status: MonitoringPingStatus,
+  latencyMs: number | null = null
+): MonitoringPingResult {
+  return {
+    id,
+    host,
+    label: 'debug',
+    status,
+    latencyMs,
+    checkedAt: Date.now()
+  }
+}
+
+/** Temporary sample card for the new layout — remove after QA. */
+function MonitoringDebugObjectCard({ now }: { now: number }) {
+  const object: MonitoringObject = {
+    id: 'debug-preview',
+    code: 'owl9999',
+    linkHost: '10.12.34.1',
+    serverHost: '10.12.34.252',
+    serverLogin: DEFAULT_SERVER_LOGIN,
+    serverPassword: '',
+    serverVersion: '2.14.3',
+    camerasTotal: 12,
+    camerasOnline: 11,
+    megaphonesTotal: 4,
+    megaphonesOnline: 4
+  }
+  const linkId = targetId(object.id, 'link')
+  const serverId = targetId(object.id, 'server')
+  const results: ResultMap = {
+    [linkId]: mockPingResult(linkId, object.linkHost, 'online', 28),
+    [serverId]: mockPingResult(serverId, object.serverHost, 'online', 41)
+  }
+  const latencyHistory: LatencyHistoryMap = {
+    [linkId]: [24, 28, 31, 27, 29]
+  }
+
+  return (
+    <MonitoringObjectCard
+      object={object}
+      results={results}
+      latencyHistory={latencyHistory}
+      linkStatusHistory={{}}
+      checkingLink={false}
+      checkingServer={false}
+      serverVersion={object.serverVersion ?? null}
+      serverVersionError={null}
+      serverResources={DEBUG_SERVER_RESOURCES}
+      camerasPreviewLoading={false}
+      megaphonesStatusLoading={false}
+      camerasMetricFailed={false}
+      megaphonesMetricFailed={false}
+      now={now}
+      debug
+    />
+  )
+}
+
 export function Monitoring() {
   const [snapshot, setSnapshot] = useState(() => loadMonitoringSnapshot())
   const [editor, setEditor] = useState<EditorState>(null)
@@ -1114,8 +1397,10 @@ export function Monitoring() {
   const mountedRef = useRef(true)
   const snapshotRef = useRef(snapshot)
   const resultsRef = useRef(results)
+  const linkStatusHistoryRef = useRef(linkStatusHistory)
   snapshotRef.current = snapshot
   resultsRef.current = results
+  linkStatusHistoryRef.current = linkStatusHistory
 
   useEffect(() => {
     mountedRef.current = true
@@ -1125,10 +1410,9 @@ export function Monitoring() {
   }, [])
 
   useEffect(() => {
-    if (!snapshot.objects.length) return
-    const timer = window.setInterval(() => setUiClock(Date.now()), MONITORING_TICK_MS)
+    const timer = window.setInterval(() => setUiClock(Date.now()), RESOURCE_METRIC_FLIP_MS)
     return () => window.clearInterval(timer)
-  }, [snapshot.objects.length])
+  }, [])
 
   const getSchedule = useCallback((objectId: string): ObjectProbeSchedule => {
     const current = scheduleRef.current[objectId]
@@ -1412,15 +1696,29 @@ export function Monitoring() {
             const objectId = result.id.replace(/:link$/, '')
             const object = objects.find((item) => item.id === objectId)
             const schedule = getSchedule(objectId)
+            const checkedAt = result.checkedAt || Date.now()
+            const statusHistory = appendLinkStatusSample(
+              linkStatusHistoryRef.current[result.id],
+              result.status === 'online',
+              checkedAt
+            )
+            updateSignalTier(schedule, {
+              online: result.status === 'online',
+              latencyMs: result.latencyMs,
+              replyCount: result.replyCount,
+              sentCount: result.sentCount,
+              unstable: isLinkUnstable(statusHistory, checkedAt)
+            })
             if (result.status === 'online') {
               schedule.linkFailures = 0
-              schedule.nextLinkAt = now + successDelayMs(MONITORING_LINK_INTERVAL_MS)
+              schedule.nextLinkAt =
+                checkedAt + successDelayMs(adaptiveIntervalMs('link', schedule.signalTier))
               if (schedule.nextServerAt === 0 || schedule.nextServerAt > now + MONITORING_SERVER_INTERVAL_MS) {
                 schedule.nextServerAt = now
               }
             } else {
               schedule.linkFailures += 1
-              schedule.nextLinkAt = now + linkFailureBackoffMs(schedule.linkFailures)
+              schedule.nextLinkAt = checkedAt + linkFailureBackoffMs(schedule.linkFailures)
               schedule.nextServerAt = Number.MAX_SAFE_INTEGER
               bumpProbeEpoch(objectId)
               const serverResult: MonitoringPingResult = {
@@ -1585,18 +1883,26 @@ export function Monitoring() {
 
             if (result.status === 'offline') {
               schedule.serverFailures += 1
-              schedule.nextServerAt = now + failureBackoffMs(schedule.serverFailures, MONITORING_SERVER_INTERVAL_MS)
+              schedule.lastHttpOk = false
+              schedule.nextServerAt =
+                Date.now() + failureBackoffMs(schedule.serverFailures, MONITORING_SERVER_INTERVAL_MS)
               bumpProbeEpoch(object.id)
               continue
             }
 
             if (result.status === 'error') {
+              schedule.serverFailures += 1
+              schedule.lastHttpOk = false
+              schedule.nextServerAt =
+                Date.now() + failureBackoffMs(schedule.serverFailures, MONITORING_SERVER_INTERVAL_MS)
               bumpProbeEpoch(object.id)
+              continue
             }
 
-            // Ping ok (OWL up or only HTTP down) — keep regular interval; no ICMP backoff.
             schedule.serverFailures = 0
-            schedule.nextServerAt = now + successDelayMs(MONITORING_SERVER_INTERVAL_MS)
+            schedule.lastHttpOk = true
+            schedule.nextServerAt =
+              Date.now() + successDelayMs(adaptiveIntervalMs('server', schedule.signalTier))
 
             if (result.status === 'online') {
               const streamsStale =
@@ -1692,7 +1998,8 @@ export function Monitoring() {
         const isFirstPreview = object.camerasOnline === undefined
         const epoch = probeEpochRef.current[object.id] ?? 0
         previewInFlightRef.current.add(object.id)
-        schedule.nextPreviewAt = now + successDelayMs(MONITORING_PREVIEW_INTERVAL_MS)
+        schedule.nextPreviewAt =
+          now + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
 
         if (isFirstPreview) {
           setCamerasMetricFailed((prev) => clearIdFlag(prev, object.id))
@@ -1713,7 +2020,8 @@ export function Monitoring() {
             console.log('[monitoring] preview result', result)
             if (!result.ok) {
               schedule.previewFailures += 1
-              schedule.nextPreviewAt = now + failureBackoffMs(schedule.previewFailures, MONITORING_PREVIEW_INTERVAL_MS)
+              schedule.nextPreviewAt =
+                Date.now() + failureBackoffMs(schedule.previewFailures, MONITORING_PREVIEW_INTERVAL_MS)
               if (isFirstPreview) {
                 setCamerasMetricFailed((prev) => ({ ...prev, [object.id]: true }))
               }
@@ -1722,6 +2030,8 @@ export function Monitoring() {
             }
 
             schedule.previewFailures = 0
+            schedule.nextPreviewAt =
+              Date.now() + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
             setCamerasMetricFailed((prev) => clearIdFlag(prev, object.id))
             setSnapshot((prev) => {
               const current = prev.objects.find((item) => item.id === object.id)
@@ -1787,7 +2097,8 @@ export function Monitoring() {
         const isFirstStatus = object.megaphonesOnline === undefined
         const epoch = probeEpochRef.current[object.id] ?? 0
         megaphoneStatusInFlightRef.current.add(object.id)
-        schedule.nextMegaphoneStatusAt = now + successDelayMs(MONITORING_PREVIEW_INTERVAL_MS)
+        schedule.nextMegaphoneStatusAt =
+          now + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
 
         if (isFirstStatus) {
           setMegaphonesMetricFailed((prev) => clearIdFlag(prev, object.id))
@@ -1808,7 +2119,7 @@ export function Monitoring() {
             if (!result.ok) {
               schedule.megaphoneStatusFailures += 1
               schedule.nextMegaphoneStatusAt =
-                now + failureBackoffMs(schedule.megaphoneStatusFailures, MONITORING_PREVIEW_INTERVAL_MS)
+                Date.now() + failureBackoffMs(schedule.megaphoneStatusFailures, MONITORING_PREVIEW_INTERVAL_MS)
               if (isFirstStatus) {
                 setMegaphonesMetricFailed((prev) => ({ ...prev, [object.id]: true }))
               }
@@ -1817,6 +2128,8 @@ export function Monitoring() {
             }
 
             schedule.megaphoneStatusFailures = 0
+            schedule.nextMegaphoneStatusAt =
+              Date.now() + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
             setMegaphonesMetricFailed((prev) => clearIdFlag(prev, object.id))
             setSnapshot((prev) => {
               const current = prev.objects.find((item) => item.id === object.id)
@@ -1975,34 +2288,34 @@ export function Monitoring() {
         onDelete={deleteObject}
       />
 
-      {snapshot.objects.length > 0 ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {snapshot.objects.map((object) => (
-            <MonitoringObjectCard
-              key={object.id}
-              object={object}
-              results={results}
-              latencyHistory={latencyHistory}
-              linkStatusHistory={linkStatusHistory}
-              checkingLink={Boolean(linkChecking[object.id])}
-              checkingServer={Boolean(serverChecking[object.id])}
-              serverVersion={object.serverVersion ?? null}
-              serverVersionError={serverVersionErrors[object.id] ?? null}
-              camerasPreviewLoading={Boolean(camerasPreviewLoading[object.id])}
-              megaphonesStatusLoading={Boolean(megaphonesStatusLoading[object.id])}
-              camerasMetricFailed={Boolean(camerasMetricFailed[object.id])}
-              megaphonesMetricFailed={Boolean(megaphonesMetricFailed[object.id])}
-              now={uiClock}
-              onEdit={openEditEditor}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="flex min-h-[min(420px,calc(100vh-18rem))] items-center justify-center">
-          <p className="text-center text-[15px] font-medium text-label-secondary">
-            Нет объектов для отслеживания
-          </p>
-        </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <MonitoringDebugObjectCard now={uiClock} />
+        {snapshot.objects.map((object) => (
+          <MonitoringObjectCard
+            key={object.id}
+            object={object}
+            results={results}
+            latencyHistory={latencyHistory}
+            linkStatusHistory={linkStatusHistory}
+            checkingLink={Boolean(linkChecking[object.id])}
+            checkingServer={Boolean(serverChecking[object.id])}
+            serverVersion={object.serverVersion ?? null}
+            serverVersionError={serverVersionErrors[object.id] ?? null}
+            serverResources={DEBUG_SERVER_RESOURCES}
+            camerasPreviewLoading={Boolean(camerasPreviewLoading[object.id])}
+            megaphonesStatusLoading={Boolean(megaphonesStatusLoading[object.id])}
+            camerasMetricFailed={Boolean(camerasMetricFailed[object.id])}
+            megaphonesMetricFailed={Boolean(megaphonesMetricFailed[object.id])}
+            now={uiClock}
+            onEdit={openEditEditor}
+          />
+        ))}
+      </div>
+
+      {snapshot.objects.length === 0 && (
+        <p className="mt-6 text-center text-[15px] font-medium text-label-secondary">
+          Нет объектов для отслеживания
+        </p>
       )}
     </article>
   )

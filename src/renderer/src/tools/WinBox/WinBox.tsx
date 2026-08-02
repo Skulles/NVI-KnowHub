@@ -25,7 +25,7 @@ import {
 } from './winboxConfigStorage'
 
 type ConfigDeviceFlow = 'lte-ipsec' | 'groovea'
-type WirelessStack = 'legacy' | 'wifi'
+type WirelessStack = 'legacy' | 'wifi' | 'w60g'
 
 const MIKROTIK_CONFIG_DEVICES = [
   {
@@ -69,9 +69,9 @@ const MIKROTIK_CONFIG_DEVICES = [
     label: 'Wireless Wire nRAY',
     image: wirelessWireNrayImage,
     flow: 'groovea' as const,
-    nameSlug: '',
-    wirelessStack: 'legacy' as const,
-    disabled: true,
+    nameSlug: 'nRAY',
+    wirelessStack: 'w60g' as const,
+    disabled: false,
   },
 ] as const
 
@@ -126,12 +126,16 @@ const WIFI_LINK_ROLE_LABELS: Partial<Record<GrooveaRole, string>> = {
 
 const GROOVEA_ROLE_INDEX: Record<GrooveaRole, number> = { ap: 0, station1: 1, station2: 2 }
 
+function isPairLinkStack(wirelessStack: WirelessStack): boolean {
+  return wirelessStack === 'wifi' || wirelessStack === 'w60g'
+}
+
 function getLinkRoles(wirelessStack: WirelessStack): readonly GrooveaRole[] {
-  return wirelessStack === 'wifi' ? WIFI_LINK_ROLES : GROOVEA_ROLES
+  return isPairLinkStack(wirelessStack) ? WIFI_LINK_ROLES : GROOVEA_ROLES
 }
 
 function getLinkRoleLabels(wirelessStack: WirelessStack): Partial<Record<GrooveaRole, string>> {
-  return wirelessStack === 'wifi' ? WIFI_LINK_ROLE_LABELS : GROOVEA_ROLE_LABELS
+  return isPairLinkStack(wirelessStack) ? WIFI_LINK_ROLE_LABELS : GROOVEA_ROLE_LABELS
 }
 
 function buildGrooveaDeviceName(
@@ -140,13 +144,13 @@ function buildGrooveaDeviceName(
   nameSlug: string,
   wirelessStack: WirelessStack = 'legacy',
 ): string {
-  if (role === 'ap') return `owl${owlDigits}-${nameSlug}-ap`
-  if (wirelessStack === 'wifi' || role === 'station1') {
-    return wirelessStack === 'wifi'
-      ? `owl${owlDigits}-${nameSlug}-station`
-      : `owl${owlDigits}-${nameSlug}-station1`
+  if (role === 'ap') return `OWL${owlDigits}-${nameSlug}-ap`
+  if (isPairLinkStack(wirelessStack) || role === 'station1') {
+    return isPairLinkStack(wirelessStack)
+      ? `OWL${owlDigits}-${nameSlug}-station`
+      : `OWL${owlDigits}-${nameSlug}-station1`
   }
-  return `owl${owlDigits}-${nameSlug}-station2`
+  return `OWL${owlDigits}-${nameSlug}-station2`
 }
 
 function buildGrooveaSsid(owlDigits: string, nameSlug: string): string {
@@ -160,11 +164,11 @@ const WIFI_LINK_HOST_SUFFIXES = [210, 211] as const
 const WIFI_LINK_HOST_LABELS = ['AP', 'Station'] as const
 
 function getLinkHostSuffixes(wirelessStack: WirelessStack): readonly number[] {
-  return wirelessStack === 'wifi' ? WIFI_LINK_HOST_SUFFIXES : GROOVEA_HOST_SUFFIXES
+  return isPairLinkStack(wirelessStack) ? WIFI_LINK_HOST_SUFFIXES : GROOVEA_HOST_SUFFIXES
 }
 
 function getLinkHostLabels(wirelessStack: WirelessStack): readonly string[] {
-  return wirelessStack === 'wifi' ? WIFI_LINK_HOST_LABELS : GROOVEA_HOST_LABELS
+  return isPairLinkStack(wirelessStack) ? WIFI_LINK_HOST_LABELS : GROOVEA_HOST_LABELS
 }
 
 function owlDigitsToGrooveaPrefix(digits: string): [string, string, string] | null {
@@ -226,6 +230,13 @@ function linkChannelSettings(band: GrooveaWirelessBand): {
   }
 }
 
+/**
+ * Fixed W60G channel for nRAY (EU region).
+ * 58320 (ch1 / 58.32 GHz) — certified for nRAY, away from O₂ absorption peak (~60 GHz).
+ * Locking frequency (vs auto) avoids mid-link channel hops; station scan-list matches AP.
+ */
+const NRAY_W60G_FREQUENCY = 58320
+
 function buildCredentialsSummary(owlDigits: string, adminPassword: string): string {
   return [
     `OWLGUARD ID: ${owlDigits}`,
@@ -249,7 +260,9 @@ function buildGrooveaConfigHeader(
     `OWLGUARD ID: ${owlDigits}`,
     ...roles.map((role, index) => `${roleLabels[role] ?? role}: ${hosts[index]}/24`),
   ]
-  if (wirelessStack === 'wifi') {
+  if (wirelessStack === 'w60g') {
+    lines.push(`Канал: ${NRAY_W60G_FREQUENCY} (58.32 ГГц)`)
+  } else if (wirelessStack === 'wifi') {
     if (wirelessBand) lines.push(`Диапазон: ${wirelessBand}`)
   } else {
     lines.push(`Протокол: ${wirelessProtocol}`)
@@ -547,6 +560,14 @@ function GrooveaWirelessSettings({
   onProtocolChange: (value: GrooveaWirelessProtocol) => void
   onBandChange: (value: GrooveaWirelessBand) => void
 }) {
+  if (wirelessStack === 'w60g') {
+    return (
+      <p className="m-0 text-[13px] leading-relaxed text-label-tertiary">
+        PtP-линк 60&nbsp;ГГц (W60G): канал {NRAY_W60G_FREQUENCY} (58.32&nbsp;ГГц), регион EU.
+      </p>
+    )
+  }
+
   if (wirelessStack === 'wifi') {
     return (
       <div className="flex items-center gap-3">
@@ -1047,6 +1068,41 @@ function buildMantboxAxLanBlock(options: {
   ]
 }
 
+/** Wireless Wire nRAY (W60G PtP): bridge + station-bridge per MikroTik PtP CLI example. */
+function buildNrayLanBlock(options: {
+  role: GrooveaRole
+  hosts: string[]
+  net: string
+  ssid: string
+  linkKey: string
+}): string[] {
+  const { role, hosts, net, ssid, linkKey } = options
+  const roleIndex = GROOVEA_ROLE_INDEX[role]
+  const ipAddr = hosts[roleIndex]
+  const escapedSsid = escapeRouterOsString(ssid)
+  const escapedKey = escapeRouterOsString(linkKey)
+  const frequency = NRAY_W60G_FREQUENCY
+
+  const lines: string[] = [
+    `/interface bridge add name=bridge-lan`,
+    `/interface bridge port add bridge=bridge-lan interface=ether1`,
+    `/interface bridge port add bridge=bridge-lan interface=wlan60-1`,
+  ]
+
+  if (role === 'ap') {
+    lines.push(
+      `/interface w60g set wlan60-1 disabled=no mode=bridge frequency=${frequency} region=eu ssid="${escapedSsid}" password="${escapedKey}" put-stations-in-bridge=bridge-lan isolate-stations=yes`,
+    )
+  } else {
+    lines.push(
+      `/interface w60g set wlan60-1 disabled=no mode=station-bridge frequency=auto scan-list=${frequency} region=eu ssid="${escapedSsid}" password="${escapedKey}"`,
+    )
+  }
+
+  lines.push(`/ip address add address=${ipAddr}/24 network=${net} interface=bridge-lan`)
+  return lines
+}
+
 function buildGrooveaLanBlock(options: {
   role: GrooveaRole
   hosts: string[]
@@ -1061,14 +1117,20 @@ function buildGrooveaLanBlock(options: {
   if (wirelessStack === 'wifi') {
     return buildMantboxAxLanBlock({ role, hosts, net, band, ssid, linkKey })
   }
+  if (wirelessStack === 'w60g') {
+    return buildNrayLanBlock({ role, hosts, net, ssid, linkKey })
+  }
 
   const roleIndex = GROOVEA_ROLE_INDEX[role]
   const ipAddr = hosts[roleIndex]
-  const mode = role === 'ap' ? 'ap-bridge' : 'station'
   const escapedSsid = escapeRouterOsString(ssid)
   const escapedKey = escapeRouterOsString(linkKey)
   const { frequency, legacyBand } = linkChannelSettings(band)
   const bandName = protocol === 'nv2' ? legacyBand : grooveaBandToRouterOs(band)
+  // GrooveA 52 ac / Metal 52 ac stock omni: 6 dBi @ 2.4 GHz, 8 dBi @ 5 GHz
+  const antennaGain = band === '2.4 ГГц' ? 6 : 8
+  const wirelessCommon =
+    `band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all installation=outdoor antenna-gain=${antennaGain} country=russia`
 
   const lines: string[] = [
     `/interface bridge add name=bridge-lan`,
@@ -1079,22 +1141,22 @@ function buildGrooveaLanBlock(options: {
   if (protocol === 'nv2') {
     if (role === 'ap') {
       lines.push(
-        `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia`,
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge ${wirelessCommon} wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}"`,
       )
     } else {
       lines.push(
-        `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}" antenna-gain=8 country=russia`,
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=station ${wirelessCommon} scan-list=${frequency} wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}"`,
       )
     }
   } else if (role === 'ap') {
     lines.push(
       `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=${bandName} frequency=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge ${wirelessCommon} wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link`,
     )
   } else {
     lines.push(
       `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=station band=${bandName} frequency=${frequency} scan-list=${frequency} channel-width=20mhz skip-dfs-channels=all wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link antenna-gain=8 country=russia`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=station ${wirelessCommon} scan-list=${frequency} wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link`,
     )
   }
 
@@ -1245,6 +1307,7 @@ function MikrotikConfigGenerator() {
     () => getLinkRoleLabels(deviceWirelessStack),
     [deviceWirelessStack],
   )
+  const activePreviewRole: GrooveaRole = linkRoles.includes(previewRole) ? previewRole : 'ap'
   const linkHostLabels = useMemo(
     () => getLinkHostLabels(deviceWirelessStack),
     [deviceWirelessStack],
@@ -1328,7 +1391,7 @@ function MikrotikConfigGenerator() {
     if (isGroovea) {
       if (!grooveaAddresses || !/^\d{4}$/.test(owlDigits)) return ''
       return buildGrooveaDeviceConfig({
-        role: previewRole,
+        role: activePreviewRole,
         owlDigits,
         nameSlug: deviceNameSlug,
         ssid: grooveaSsid,
@@ -1366,7 +1429,7 @@ function MikrotikConfigGenerator() {
     grooveaWirelessBand,
     grooveaAddresses,
     owlDigits,
-    previewRole,
+    activePreviewRole,
     linkKey,
     grooveaSsid,
     deviceNameSlug,
@@ -1944,7 +2007,11 @@ function MikrotikConfigGenerator() {
                             autoComplete="off"
                             value={linkKey}
                             onChange={(e) => setLinkKey(e.target.value)}
-                            placeholder="Одинаковый на AP и станциях"
+                            placeholder={
+                              isPairLinkStack(deviceWirelessStack)
+                                ? 'Одинаковый на AP и Station'
+                                : 'Одинаковый на AP и станциях'
+                            }
                             className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40`}
                           />
                           <button
@@ -2057,7 +2124,7 @@ function MikrotikConfigGenerator() {
                     </span>
                     {isGroovea && (
                       <SegmentToggle<GrooveaRole>
-                        value={previewRole}
+                        value={activePreviewRole}
                         options={linkRoles}
                         labels={linkRoleLabels}
                         onChange={setPreviewRole}

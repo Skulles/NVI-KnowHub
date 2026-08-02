@@ -117,7 +117,7 @@ function countPingReplies(output: string): number {
   if (ttlHits.length) return ttlHits.length
 
   // English / partial localized forms when code page mangled Cyrillic.
-  const byteHits = [...output.matchAll(/\b(?:bytes|байт)\s*[=:]/gi)]
+  const byteHits = [...output.matchAll(/\b(?:bytes\s+from|bytes\s*[=:]|байт\s*[=:])/gi)]
   return byteHits.length
 }
 
@@ -174,6 +174,8 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
             ...target,
             status: 'online',
             latencyMs,
+            replyCount,
+            sentCount: PING_COUNT,
             checkedAt: Date.now()
           })
           return
@@ -184,6 +186,8 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
             ...target,
             status: 'online',
             latencyMs: null,
+            replyCount: PING_COUNT,
+            sentCount: PING_COUNT,
             checkedAt: Date.now()
           })
           return
@@ -199,6 +203,8 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
           ...target,
           status: offline ? 'offline' : 'error',
           latencyMs: null,
+          replyCount: 0,
+          sentCount: PING_COUNT,
           checkedAt: Date.now(),
           error: offline ? undefined : error.message
         })

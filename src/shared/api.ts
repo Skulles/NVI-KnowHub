@@ -28,6 +28,10 @@ export interface MonitoringPingResult {
   label: string
   status: MonitoringPingStatus
   latencyMs: number | null
+  /** Successful ICMP replies received for this probe. */
+  replyCount?: number
+  /** ICMP packets sent for this probe. */
+  sentCount?: number
   checkedAt: number
   error?: string
 }
