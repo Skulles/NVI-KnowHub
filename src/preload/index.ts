@@ -58,10 +58,13 @@ const api: ElectronAPI = {
   monitoringHttpProbe: (targets) => ipcRenderer.invoke('monitoring:http-probe', targets),
   monitoringFetchVersion: (request) => ipcRenderer.invoke('monitoring:fetch-version', request),
   monitoringFetchStreams: (request) => ipcRenderer.invoke('monitoring:fetch-streams', request),
+  monitoringFetchLocations: (request) => ipcRenderer.invoke('monitoring:fetch-locations', request),
   monitoringPreviewCameras: (request) => ipcRenderer.invoke('monitoring:preview-cameras', request),
   monitoringFetchMegaphones: (request) => ipcRenderer.invoke('monitoring:fetch-megaphones', request),
   monitoringFetchMegaphoneStatuses: (request) =>
-    ipcRenderer.invoke('monitoring:fetch-megaphone-statuses', request)
+    ipcRenderer.invoke('monitoring:fetch-megaphone-statuses', request),
+  monitoringFetchDevices: (request) => ipcRenderer.invoke('monitoring:fetch-devices', request),
+  monitoringProbeDevices: (request) => ipcRenderer.invoke('monitoring:probe-devices', request)
 }
 
 contextBridge.exposeInMainWorld('api', api)

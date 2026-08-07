@@ -21,6 +21,8 @@ export const MONITORING_MAX_LINK_BACKOFF_MS = 45_000
 export const MONITORING_LINK_STABILITY_WINDOW_MS = 2 * 60_000
 /** Min online↔offline flips inside the window to mark link unstable. */
 export const MONITORING_LINK_STABILITY_MIN_FLIPS = 2
+/** Consecutive same-status probes (online or offline) required to clear sticky instability. */
+export const MONITORING_LINK_STABILITY_RECOVERY_SUCCESSES = 5
 export const MONITORING_LINK_STATUS_HISTORY_LIMIT = 12
 /** A very low RTT usually means the workstation is connected directly to the object network. */
 export const MONITORING_DIRECT_LINK_LATENCY_MS = 10
@@ -57,16 +59,57 @@ export interface LinkStatusSample {
   at: number
 }
 
+function countStatusFlips(samples: LinkStatusSample[]): number {
+  let flips = 0
+  for (let index = 1; index < samples.length; index += 1) {
+    if (samples[index].online !== samples[index - 1].online) flips += 1
+  }
+  return flips
+}
+
+function consecutiveOnlineTail(history: LinkStatusSample[] | undefined): number {
+  if (!history?.length) return 0
+  let streak = 0
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (!history[index].online) break
+    streak += 1
+  }
+  return streak
+}
+
+function consecutiveOfflineTail(history: LinkStatusSample[] | undefined): number {
+  if (!history?.length) return 0
+  let streak = 0
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index].online) break
+    streak += 1
+  }
+  return streak
+}
+
 /** True when the link recently flipped online↔offline enough times. */
-export function isLinkUnstable(history: LinkStatusSample[] | undefined, now = Date.now()): boolean {
+export function isLinkFlapping(history: LinkStatusSample[] | undefined, now = Date.now()): boolean {
   if (!history?.length) return false
   const recent = history.filter((sample) => now - sample.at <= MONITORING_LINK_STABILITY_WINDOW_MS)
   if (recent.length < 3) return false
-  let flips = 0
-  for (let index = 1; index < recent.length; index += 1) {
-    if (recent[index].online !== recent[index - 1].online) flips += 1
-  }
-  return flips >= MONITORING_LINK_STABILITY_MIN_FLIPS
+  return countStatusFlips(recent) >= MONITORING_LINK_STABILITY_MIN_FLIPS
+}
+
+/**
+ * Sticky instability: latches on flapping, stays through short online/offline runs, and clears
+ * after several consecutive successful replies — or several consecutive no-replies.
+ */
+export function resolveLinkUnstable(
+  previouslyUnstable: boolean,
+  history: LinkStatusSample[] | undefined,
+  now = Date.now()
+): boolean {
+  const settled =
+    consecutiveOnlineTail(history) >= MONITORING_LINK_STABILITY_RECOVERY_SUCCESSES ||
+    consecutiveOfflineTail(history) >= MONITORING_LINK_STABILITY_RECOVERY_SUCCESSES
+  if (settled) return false
+  if (isLinkFlapping(history, now)) return true
+  return previouslyUnstable
 }
 
 export function appendLinkStatusSample(
@@ -92,20 +135,28 @@ export interface ObjectProbeSchedule {
   nextServerAt: number
   nextPreviewAt: number
   nextMegaphoneStatusAt: number
+  nextDeviceProbeAt: number
   linkFailures: number
   serverFailures: number
   previewFailures: number
   megaphoneStatusFailures: number
+  deviceProbeFailures: number
   signalTier: SignalTier
   signalUpgradeSamples: number
   signalCandidateTier: SignalTier
   lastHttpOk: boolean | null
   lastStreamsAt: number
+  lastLocationsAt: number
   lastMegaphonesAt: number
+  lastDevicesAt: number
   /** Streams list fetched successfully for current credentials. */
   streamsReady: boolean
+  /** Locations list fetched successfully for current credentials. */
+  locationsReady: boolean
   /** Megaphones list fetched successfully for current credentials. */
   megaphonesReady: boolean
+  /** Guard devices list fetched successfully for current credentials. */
+  devicesReady: boolean
 }
 
 export function createProbeSchedule(now = Date.now()): ObjectProbeSchedule {
@@ -114,18 +165,24 @@ export function createProbeSchedule(now = Date.now()): ObjectProbeSchedule {
     nextServerAt: 0,
     nextPreviewAt: 0,
     nextMegaphoneStatusAt: 0,
+    nextDeviceProbeAt: 0,
     linkFailures: 0,
     serverFailures: 0,
     previewFailures: 0,
     megaphoneStatusFailures: 0,
+    deviceProbeFailures: 0,
     signalTier: 'unknown',
     signalUpgradeSamples: 0,
     signalCandidateTier: 'unknown',
     lastHttpOk: null,
     lastStreamsAt: 0,
+    lastLocationsAt: 0,
     lastMegaphonesAt: 0,
+    lastDevicesAt: 0,
     streamsReady: false,
-    megaphonesReady: false
+    locationsReady: false,
+    megaphonesReady: false,
+    devicesReady: false
   }
 }
 

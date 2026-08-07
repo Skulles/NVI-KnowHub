@@ -6,9 +6,18 @@ import { ipcMain } from 'electron'
 import type {
   MonitoringAuthRequest,
   MonitoringCameraStream,
-  MonitoringCountResult,
+  MonitoringDeviceProbeBody,
+  MonitoringDeviceProbeRequest,
+  MonitoringDeviceProbeResult,
+  MonitoringDevicesResult,
+  MonitoringGuardDevice,
   MonitoringHttpResult,
   MonitoringHttpTarget,
+  MonitoringLocation,
+  MonitoringLocationsResult,
+  MonitoringMegaphone,
+  MonitoringMegaphonesResult,
+  MonitoringMegaphoneStatusesResult,
   MonitoringPingResult,
   MonitoringPingTarget,
   MonitoringPreviewRequest,
@@ -87,21 +96,22 @@ function normalizeHostTargets<T extends { id: string; host: string; label: strin
     .map((target) => ({
       id: typeof target.id === 'string' ? target.id : '',
       host: typeof target.host === 'string' ? target.host : '',
-      label: typeof target.label === 'string' ? target.label : ''
+      label: typeof target.label === 'string' ? target.label : '',
+      fast: target.fast === true
     }))
-    .filter((target) => target.id && target.label && isValidIPv4(target.host)) as T[]
+    .filter((target) => target.id && target.label && isValidIPv4(target.host)) as unknown as T[]
 }
 
-function getPingArgs(host: string): string[] {
+function getPingArgs(host: string, count: number): string[] {
   if (process.platform === 'win32') {
-    return ['-n', String(PING_COUNT), '-w', String(PING_TIMEOUT_MS), host]
+    return ['-n', String(count), '-w', String(PING_TIMEOUT_MS), host]
   }
 
   if (process.platform === 'darwin') {
-    return ['-c', String(PING_COUNT), '-W', String(PING_TIMEOUT_MS), host]
+    return ['-c', String(count), '-W', String(PING_TIMEOUT_MS), host]
   }
 
-  return ['-c', String(PING_COUNT), '-W', String(Math.ceil(PING_TIMEOUT_MS / 1000)), host]
+  return ['-c', String(count), '-W', String(Math.ceil(PING_TIMEOUT_MS / 1000)), host]
 }
 
 function decodePingOutput(stdout: Buffer | string, stderr: Buffer | string): string {
@@ -159,10 +169,11 @@ function parseLatencyMs(output: string): number | null {
 
 function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult> {
   return new Promise((resolve) => {
+    const count = target.fast ? 1 : PING_COUNT
     execFile(
       'ping',
-      getPingArgs(target.host),
-      { timeout: PING_TIMEOUT_MS * PING_COUNT + 3000, encoding: 'buffer' },
+      getPingArgs(target.host, count),
+      { timeout: PING_TIMEOUT_MS * count + 3000, encoding: 'buffer' },
       (error, stdout, stderr) => {
         const output = decodePingOutput(stdout, stderr)
         const latencyMs = parseLatencyMs(output)
@@ -175,7 +186,7 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
             status: 'online',
             latencyMs,
             replyCount,
-            sentCount: PING_COUNT,
+            sentCount: count,
             checkedAt: Date.now()
           })
           return
@@ -186,8 +197,8 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
             ...target,
             status: 'online',
             latencyMs: null,
-            replyCount: PING_COUNT,
-            sentCount: PING_COUNT,
+            replyCount: count,
+            sentCount: count,
             checkedAt: Date.now()
           })
           return
@@ -204,7 +215,7 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
           status: offline ? 'offline' : 'error',
           latencyMs: null,
           replyCount: 0,
-          sentCount: PING_COUNT,
+          sentCount: count,
           checkedAt: Date.now(),
           error: offline ? undefined : error.message
         })
@@ -297,8 +308,20 @@ function megaphonesEndpoint(host: string): string {
   return `http://${host}/gateway/config/core/megaphones`
 }
 
+function locationsEndpoint(host: string): string {
+  return `http://${host}/gateway/config/core/locations`
+}
+
 function megaphoneStatusesEndpoint(host: string): string {
   return `http://${host}/gateway/Megaphone/statuses/V2`
+}
+
+function devicesEndpoint(host: string): string {
+  return `http://${host}/gateway/config/guard/devices`
+}
+
+function telemetryProbeEndpoint(host: string): string {
+  return `http://${host}/gateway/Telemetry/probe`
 }
 
 function parseTokenResponse(payload: unknown): CachedToken {
@@ -457,6 +480,8 @@ async function authorizedFetch(
         method,
         headers: {
           Accept: 'application/json, text/plain, */*',
+          // OWL.Guard localizes `localizedName` from Accept-Language (browser sends ru).
+          'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.5',
           Authorization: `Bearer ${accessToken}`,
           ...headers
         },
@@ -570,22 +595,81 @@ function parseCameraStreams(payload: unknown): MonitoringCameraStream[] {
     .filter((item): item is MonitoringCameraStream => item !== null)
 }
 
-function parseArrayCount(payload: unknown, label: string): number {
-  if (Array.isArray(payload)) return payload.length
+function extractPayloadArray(payload: unknown): unknown[] | null {
+  if (Array.isArray(payload)) return payload
 
   if (isPlainObject(payload)) {
     for (const key of ['items', 'result', 'results', 'data', 'previews', 'value', 'streams', 'statuses']) {
       const value = payload[key]
-      if (Array.isArray(value)) return value.length
+      if (Array.isArray(value)) return value
     }
 
     const values = Object.values(payload)
     if (values.length > 0 && values.every((value) => value !== null && typeof value === 'object')) {
-      return values.length
+      return values
     }
   }
 
+  return null
+}
+
+function parseArrayCount(payload: unknown, label: string): number {
+  const items = extractPayloadArray(payload)
+  if (items) return items.length
   throw new Error(`Некорректный ответ ${label} (${Array.isArray(payload) ? 'array' : typeof payload})`)
+}
+
+/** IDs present in preview/status list responses (treated as online). */
+function parseOnlineIds(payload: unknown): number[] {
+  const items = extractPayloadArray(payload)
+  if (!items) return []
+
+  const ids: number[] = []
+  for (const item of items) {
+    if (typeof item === 'number' || typeof item === 'string') {
+      const id = parseStreamId(item)
+      if (id !== null) ids.push(id)
+      continue
+    }
+    if (!isPlainObject(item)) continue
+    const id = parseStreamId(
+      item.id ?? item.streamId ?? item.StreamId ?? item.cameraId ?? item.megaphoneId ?? item.MegaphoneId
+    )
+    if (id !== null) ids.push(id)
+  }
+
+  return [...new Set(ids)]
+}
+
+function parseMegaphones(payload: unknown): MonitoringMegaphone[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('Некорректный ответ списка рупоров')
+  }
+
+  const megaphones: MonitoringMegaphone[] = []
+  for (const item of payload) {
+    if (!isPlainObject(item)) continue
+    const id = parseStreamId(item.id)
+    if (id === null) continue
+
+    const megaphone = isPlainObject(item.megaphone) ? item.megaphone : null
+    const addressRaw =
+      megaphone && typeof megaphone.address === 'string' ? megaphone.address.trim() : ''
+    const address = addressRaw || undefined
+    const locationIds = Array.isArray(megaphone?.locationIds)
+      ? [
+          ...new Set(
+            megaphone.locationIds
+              .map((value) => parseStreamId(value))
+              .filter((value): value is number => value !== null)
+          )
+        ]
+      : []
+
+    megaphones.push({ id, locationIds, ...(address ? { address } : {}) })
+  }
+
+  return megaphones
 }
 
 async function fetchOwlGuardVersion(request: MonitoringVersionRequest): Promise<MonitoringVersionResult> {
@@ -633,6 +717,62 @@ async function fetchOwlGuardStreams(request: MonitoringAuthRequest): Promise<Mon
   }
 }
 
+function parseLocations(payload: unknown): MonitoringLocation[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('Некорректный ответ списка локаций')
+  }
+
+  const locations: MonitoringLocation[] = []
+  for (const item of payload) {
+    if (!isPlainObject(item)) continue
+    const id = parseStreamId(item.id)
+    if (id === null) continue
+
+    const location = isPlainObject(item.location) ? item.location : null
+    const params = location && isPlainObject(location.params) ? location.params : null
+    const localizedName =
+      params && typeof params.localizedName === 'string' ? params.localizedName.trim() : ''
+    if (!localizedName) continue
+
+    const parentId =
+      params && typeof params.parentId === 'number' && Number.isFinite(params.parentId)
+        ? Math.trunc(params.parentId)
+        : params && params.parentId === null
+          ? null
+          : undefined
+
+    locations.push({
+      id,
+      localizedName,
+      ...(parentId !== undefined ? { parentId } : {})
+    })
+  }
+
+  return locations
+}
+
+async function fetchOwlGuardLocations(request: MonitoringAuthRequest): Promise<MonitoringLocationsResult> {
+  try {
+    console.log(`[monitoring] locations start host=${request.host}`)
+    const { payload } = await authorizedFetch(request, () => ({
+      url: locationsEndpoint(request.host)
+    }))
+    const locations = parseLocations(payload)
+    console.log(`[monitoring] locations ok host=${request.host} count=${locations.length}`)
+    return { id: request.id, host: request.host, ok: true, locations }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Не удалось получить список локаций'
+    console.warn(`[monitoring] locations failed host=${request.host}: ${message}`)
+    return {
+      id: request.id,
+      host: request.host,
+      ok: false,
+      locations: [],
+      error: message
+    }
+  }
+}
+
 async function previewOwlGuardCameras(request: MonitoringPreviewRequest): Promise<MonitoringPreviewResult> {
   return withPreviewSlot(async () => {
     try {
@@ -648,13 +788,14 @@ async function previewOwlGuardCameras(request: MonitoringPreviewRequest): Promis
       }))
 
       const onlineCount = parseArrayCount(payload, 'PreviewV2')
+      const onlineIds = parseOnlineIds(payload)
       console.log(
-        `[monitoring] preview ok host=${request.host} online=${onlineCount} payloadType=${Array.isArray(payload) ? 'array' : typeof payload}`
+        `[monitoring] preview ok host=${request.host} online=${onlineCount} ids=${onlineIds.length} payloadType=${Array.isArray(payload) ? 'array' : typeof payload}`
       )
-      if (!Array.isArray(payload)) {
+      if (!Array.isArray(payload) || onlineIds.length !== onlineCount) {
         console.log(`[monitoring] preview payload preview=${text.slice(0, 240)}`)
       }
-      return { id: request.id, host: request.host, ok: true, onlineCount }
+      return { id: request.id, host: request.host, ok: true, onlineCount, onlineIds }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Не удалось проверить камеры'
       console.warn(`[monitoring] preview failed host=${request.host}: ${message}`)
@@ -663,43 +804,235 @@ async function previewOwlGuardCameras(request: MonitoringPreviewRequest): Promis
         host: request.host,
         ok: false,
         onlineCount: 0,
+        onlineIds: [],
         error: message
       }
     }
   })
 }
 
-async function fetchOwlGuardMegaphones(request: MonitoringAuthRequest): Promise<MonitoringCountResult> {
+async function fetchOwlGuardMegaphones(request: MonitoringAuthRequest): Promise<MonitoringMegaphonesResult> {
   try {
     console.log(`[monitoring] megaphones start host=${request.host}`)
     const { payload } = await authorizedFetch(request, () => ({
       url: megaphonesEndpoint(request.host)
     }))
-    const count = parseArrayCount(payload, 'megaphones')
-    console.log(`[monitoring] megaphones ok host=${request.host} count=${count}`)
-    return { id: request.id, host: request.host, ok: true, count }
+    const megaphones = parseMegaphones(payload)
+    console.log(`[monitoring] megaphones ok host=${request.host} count=${megaphones.length}`)
+    return { id: request.id, host: request.host, ok: true, megaphones }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Не удалось получить список рупоров'
     console.warn(`[monitoring] megaphones failed host=${request.host}: ${message}`)
-    return { id: request.id, host: request.host, ok: false, count: 0, error: message }
+    return { id: request.id, host: request.host, ok: false, megaphones: [], error: message }
   }
 }
 
-async function fetchOwlGuardMegaphoneStatuses(request: MonitoringAuthRequest): Promise<MonitoringCountResult> {
+function parseFiniteInt(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) return Number(value.trim())
+  return fallback
+}
+
+function parseStringField(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function parseGuardDevices(payload: unknown): MonitoringGuardDevice[] {
+  if (!Array.isArray(payload)) {
+    throw new Error('Некорректный ответ списка устройств')
+  }
+
+  const devices: MonitoringGuardDevice[] = []
+  for (const item of payload) {
+    if (!isPlainObject(item)) continue
+    const id = parseStreamId(item.id)
+    if (id === null) continue
+
+    const config = isPlainObject(item.config) ? item.config : null
+    const type =
+      config && typeof config.type === 'string' && config.type.trim() ? config.type.trim() : ''
+    const device = config && isPlainObject(config.device) ? config.device : null
+    const addressRaw =
+      device && typeof device.address === 'string' ? device.address.trim() : ''
+    const address = addressRaw || null
+
+    devices.push({
+      id,
+      type: type || '—',
+      address,
+      logicalAddress: parseFiniteInt(device?.logicalAddress, 0),
+      useRtuOverTcp: device?.useRtuOverTcp === true,
+      startRegister: parseFiniteInt(device?.startRegister, 0),
+      numRegisters: parseFiniteInt(device?.numRegisters, 64),
+      login: parseStringField(device?.login),
+      password: parseStringField(device?.password),
+      wellUid: parseStringField(device?.wellUid),
+      wellBoreUid: parseStringField(device?.wellBoreUid)
+    })
+  }
+
+  return devices
+}
+
+function toTelemetryProbeBody(device: MonitoringGuardDevice): MonitoringDeviceProbeBody | null {
+  if (!device.address || device.type === '—') return null
+  return {
+    type: device.type,
+    address: device.address,
+    logicalAddress: device.logicalAddress,
+    useRtuOverTcp: device.useRtuOverTcp,
+    startRegister: device.startRegister,
+    numRegisters: device.numRegisters,
+    login: device.login,
+    password: device.password,
+    wellUid: device.wellUid,
+    wellBoreUid: device.wellBoreUid
+  }
+}
+
+function parseProbeConnected(payload: unknown): boolean {
+  if (!isPlainObject(payload)) return false
+  return payload.connected === true
+}
+
+async function fetchOwlGuardDevices(request: MonitoringAuthRequest): Promise<MonitoringDevicesResult> {
+  try {
+    console.log(`[monitoring] devices start host=${request.host}`)
+    const { payload } = await authorizedFetch(request, () => ({
+      url: devicesEndpoint(request.host)
+    }))
+    const devices = parseGuardDevices(payload)
+    console.log(`[monitoring] devices ok host=${request.host} count=${devices.length}`)
+    return { id: request.id, host: request.host, ok: true, devices }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Не удалось получить список устройств'
+    console.warn(`[monitoring] devices failed host=${request.host}: ${message}`)
+    return { id: request.id, host: request.host, ok: false, devices: [], error: message }
+  }
+}
+
+async function probeOwlGuardDevices(
+  request: MonitoringDeviceProbeRequest
+): Promise<MonitoringDeviceProbeResult> {
+  return withPreviewSlot(async () => {
+    try {
+      console.log(`[monitoring] device probe start host=${request.host} count=${request.devices.length}`)
+      const onlineIds: number[] = []
+
+      await mapPool(request.devices, PREVIEW_CONCURRENCY, async (device) => {
+        const body = toTelemetryProbeBody(device)
+        if (!body) return
+
+        try {
+          const { payload } = await authorizedFetch(request, () => ({
+            url: telemetryProbeEndpoint(request.host),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            timeoutMs: PREVIEW_TIMEOUT_MS
+          }))
+          if (parseProbeConnected(payload)) onlineIds.push(device.id)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'probe failed'
+          console.warn(
+            `[monitoring] device probe item failed host=${request.host} id=${device.id}: ${message}`
+          )
+        }
+      })
+
+      const uniqueOnlineIds = [...new Set(onlineIds)]
+      console.log(
+        `[monitoring] device probe ok host=${request.host} online=${uniqueOnlineIds.length}/${request.devices.length}`
+      )
+      return {
+        id: request.id,
+        host: request.host,
+        ok: true,
+        onlineCount: uniqueOnlineIds.length,
+        onlineIds: uniqueOnlineIds
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось проверить устройства'
+      console.warn(`[monitoring] device probe failed host=${request.host}: ${message}`)
+      return {
+        id: request.id,
+        host: request.host,
+        ok: false,
+        onlineCount: 0,
+        onlineIds: [],
+        error: message
+      }
+    }
+  })
+}
+
+function normalizeDeviceProbeRequest(raw: unknown): MonitoringDeviceProbeRequest | null {
+  const auth = normalizeAuthRequest(raw)
+  if (!auth || !isPlainObject(raw) || !Array.isArray(raw.devices)) return null
+
+  const devices = normalizeGuardDevicesForProbe(raw.devices)
+  if (!devices.length) return null
+  return { ...auth, devices }
+}
+
+function normalizeGuardDevicesForProbe(value: unknown[]): MonitoringGuardDevice[] {
+  const devices: MonitoringGuardDevice[] = []
+  for (const item of value) {
+    if (!isPlainObject(item)) continue
+    const id = parseStreamId(item.id)
+    if (id === null) continue
+    const type = typeof item.type === 'string' && item.type.trim() ? item.type.trim() : ''
+    const address =
+      typeof item.address === 'string' && item.address.trim() ? item.address.trim() : null
+    if (!type || !address) continue
+
+    devices.push({
+      id,
+      type,
+      address,
+      logicalAddress: parseFiniteInt(item.logicalAddress, 0),
+      useRtuOverTcp: item.useRtuOverTcp === true,
+      startRegister: parseFiniteInt(item.startRegister, 0),
+      numRegisters: parseFiniteInt(item.numRegisters, 64),
+      login: parseStringField(item.login),
+      password: parseStringField(item.password),
+      wellUid: parseStringField(item.wellUid),
+      wellBoreUid: parseStringField(item.wellBoreUid)
+    })
+  }
+  return devices
+}
+
+async function fetchOwlGuardMegaphoneStatuses(
+  request: MonitoringAuthRequest
+): Promise<MonitoringMegaphoneStatusesResult> {
   return withPreviewSlot(async () => {
     try {
       console.log(`[monitoring] megaphone statuses start host=${request.host}`)
-      const { payload } = await authorizedFetch(request, () => ({
+      const { payload, text } = await authorizedFetch(request, () => ({
         url: megaphoneStatusesEndpoint(request.host),
         timeoutMs: PREVIEW_TIMEOUT_MS
       }))
-      const count = parseArrayCount(payload, 'Megaphone/statuses/V2')
-      console.log(`[monitoring] megaphone statuses ok host=${request.host} count=${count}`)
-      return { id: request.id, host: request.host, ok: true, count }
+      const onlineCount = parseArrayCount(payload, 'Megaphone/statuses/V2')
+      const onlineIds = parseOnlineIds(payload)
+      console.log(
+        `[monitoring] megaphone statuses ok host=${request.host} online=${onlineCount} ids=${onlineIds.length}`
+      )
+      if (!Array.isArray(payload) || onlineIds.length !== onlineCount) {
+        console.log(`[monitoring] megaphone statuses payload preview=${text.slice(0, 240)}`)
+      }
+      return { id: request.id, host: request.host, ok: true, onlineCount, onlineIds }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Не удалось получить статусы рупоров'
       console.warn(`[monitoring] megaphone statuses failed host=${request.host}: ${message}`)
-      return { id: request.id, host: request.host, ok: false, count: 0, error: message }
+      return {
+        id: request.id,
+        host: request.host,
+        ok: false,
+        onlineCount: 0,
+        onlineIds: [],
+        error: message
+      }
     }
   })
 }
@@ -757,6 +1090,23 @@ export function setupMonitoring(): void {
   )
 
   ipcMain.handle(
+    'monitoring:fetch-locations',
+    async (_, rawRequest: unknown): Promise<MonitoringLocationsResult> => {
+      const request = normalizeAuthRequest(rawRequest)
+      if (!request) {
+        return {
+          ...invalidAuthResult(rawRequest),
+          ok: false,
+          locations: [],
+          error: 'Некорректные данные для авторизации'
+        }
+      }
+
+      return fetchOwlGuardLocations(request)
+    }
+  )
+
+  ipcMain.handle(
     'monitoring:preview-cameras',
     async (_, rawRequest: unknown): Promise<MonitoringPreviewResult> => {
       const request = normalizePreviewRequest(rawRequest)
@@ -765,6 +1115,7 @@ export function setupMonitoring(): void {
           ...invalidAuthResult(rawRequest),
           ok: false,
           onlineCount: 0,
+          onlineIds: [],
           error: 'Некорректные данные для проверки камер'
         }
       }
@@ -775,13 +1126,13 @@ export function setupMonitoring(): void {
 
   ipcMain.handle(
     'monitoring:fetch-megaphones',
-    async (_, rawRequest: unknown): Promise<MonitoringCountResult> => {
+    async (_, rawRequest: unknown): Promise<MonitoringMegaphonesResult> => {
       const request = normalizeAuthRequest(rawRequest)
       if (!request) {
         return {
           ...invalidAuthResult(rawRequest),
           ok: false,
-          count: 0,
+          megaphones: [],
           error: 'Некорректные данные для авторизации'
         }
       }
@@ -792,18 +1143,54 @@ export function setupMonitoring(): void {
 
   ipcMain.handle(
     'monitoring:fetch-megaphone-statuses',
-    async (_, rawRequest: unknown): Promise<MonitoringCountResult> => {
+    async (_, rawRequest: unknown): Promise<MonitoringMegaphoneStatusesResult> => {
       const request = normalizeAuthRequest(rawRequest)
       if (!request) {
         return {
           ...invalidAuthResult(rawRequest),
           ok: false,
-          count: 0,
+          onlineCount: 0,
+          onlineIds: [],
           error: 'Некорректные данные для авторизации'
         }
       }
 
       return fetchOwlGuardMegaphoneStatuses(request)
+    }
+  )
+
+  ipcMain.handle(
+    'monitoring:fetch-devices',
+    async (_, rawRequest: unknown): Promise<MonitoringDevicesResult> => {
+      const request = normalizeAuthRequest(rawRequest)
+      if (!request) {
+        return {
+          ...invalidAuthResult(rawRequest),
+          ok: false,
+          devices: [],
+          error: 'Некорректные данные для авторизации'
+        }
+      }
+
+      return fetchOwlGuardDevices(request)
+    }
+  )
+
+  ipcMain.handle(
+    'monitoring:probe-devices',
+    async (_, rawRequest: unknown): Promise<MonitoringDeviceProbeResult> => {
+      const request = normalizeDeviceProbeRequest(rawRequest)
+      if (!request) {
+        return {
+          ...invalidAuthResult(rawRequest),
+          ok: false,
+          onlineCount: 0,
+          onlineIds: [],
+          error: 'Некорректные данные для проверки устройств'
+        }
+      }
+
+      return probeOwlGuardDevices(request)
     }
   )
 }

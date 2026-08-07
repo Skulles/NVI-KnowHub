@@ -1,8 +1,21 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon } from '../../components/Icons'
+import { ArrowPathIcon, XMarkIcon } from '../../components/Icons'
 import type {
+  MonitoringCameraStream,
+  MonitoringGuardDevice,
   MonitoringHttpTarget,
+  MonitoringLocation,
+  MonitoringMegaphone,
   MonitoringPingResult,
   MonitoringPingStatus,
   MonitoringPingTarget
@@ -12,12 +25,15 @@ import hornIconUrl from '../../assets/monitoring/horn-icon.png'
 import {
   DEFAULT_SERVER_LOGIN,
   buildMonitoringObject,
+  compareMonitoringObjectsByDigits,
+  isValidIPv4,
   joinIPv4Octets,
   loadMonitoringSnapshot,
   normalizePastedIPv4,
   objectDigits,
   parseIPv4Octets,
   parseMonitoringObject,
+  resolvePrimaryLocationName,
   sanitizeMonitoringDigits,
   sanitizeIPv4OctetInput,
   saveMonitoringSnapshot,
@@ -32,10 +48,10 @@ import {
   appendLinkStatusSample,
   createProbeSchedule,
   failureBackoffMs,
-  isLinkUnstable,
   linkBatchLimit,
   linkFailureBackoffMs,
   previewBatchLimit,
+  resolveLinkUnstable,
   schedulerTickMs,
   serverBatchLimit,
   successDelayMs,
@@ -50,12 +66,12 @@ type LinkStatusHistoryMap = Record<string, LinkStatusSample[]>
 type VersionErrorMap = Record<string, string>
 type IdFlagMap = Record<string, boolean>
 type EditorState = { mode: 'add' | 'edit'; objectId?: string } | null
+type MonitoringMetricKind = 'cameras' | 'megaphones' | 'sensors'
 
 const LINK_LATENCY_HISTORY_LIMIT = 10
 const OWL_GUARD_UNREACHABLE = 'не удалось подключиться к OWL.Guard'
 const METRICS_UNAVAILABLE = 'метрики недоступны'
-const METRICS_LOADING = 'загрузка метрик…'
-const LINK_UNSTABLE = 'связь нестабильна'
+const LINK_UNSTABLE = '[соединение нестабильно]'
 
 function versionFetchKey(object: MonitoringObject): string {
   return `${object.id}|${object.serverHost}|${object.serverLogin}|${object.serverPassword}`
@@ -64,7 +80,22 @@ function versionFetchKey(object: MonitoringObject): string {
 function formatServerVersionLabel(version: string): string {
   const trimmed = version.trim()
   if (!trimmed) return ''
-  return /^версия\b/i.test(trimmed) ? trimmed : `Версия ${trimmed}`
+  const label = /^версия\b/i.test(trimmed) ? trimmed : `Версия ${trimmed}`
+  return `[${label}]`
+}
+
+function isCredentialAuthError(message: string | undefined): boolean {
+  const lower = (message ?? '').toLowerCase()
+  return (
+    lower.includes('invalid user credentials') ||
+    lower.includes('invalid_grant') ||
+    lower.includes('unauthorized_client') ||
+    lower.includes('unauthorized') ||
+    /^http\s*401\b/i.test(message ?? '') ||
+    lower.includes('account disabled') ||
+    lower.includes('user disabled') ||
+    lower.includes('account is not fully set up')
+  )
 }
 
 function localizeMonitoringError(message: string | undefined): string {
@@ -130,6 +161,15 @@ function isOnline(result: MonitoringPingResult | undefined): boolean {
   return (result?.status ?? 'unknown') === 'online'
 }
 
+function clearCachedMetricCounts(object: MonitoringObject): MonitoringObject {
+  const next = { ...object }
+  delete next.camerasOnline
+  delete next.camerasOnlineIds
+  delete next.megaphonesOnline
+  delete next.megaphonesOnlineIds
+  return next
+}
+
 /** Objects that still need a first link and/or server result. */
 function needsProbeCatchUp(objects: MonitoringObject[], results: ResultMap): boolean {
   for (const object of objects) {
@@ -140,14 +180,16 @@ function needsProbeCatchUp(objects: MonitoringObject[], results: ResultMap): boo
   return false
 }
 
-/** Objects online but still waiting for the first camera/megaphone metric. */
+/** Objects online but still waiting for the first camera/megaphone/device metric. */
 function needsMetricsCatchUp(objects: MonitoringObject[], results: ResultMap): boolean {
   for (const object of objects) {
     if (!isOnline(results[targetId(object.id, 'link')])) continue
     if (!isOnline(results[targetId(object.id, 'server')])) continue
     const camerasTotal = object.camerasTotal ?? object.cameraStreams?.length ?? 0
     if (camerasTotal > 0 && object.camerasOnline === undefined) return true
-    if ((object.megaphonesTotal ?? 0) > 0 && object.megaphonesOnline === undefined) return true
+    if ((object.megaphonesTotal ?? object.megaphones?.length ?? 0) > 0 && object.megaphonesOnline === undefined)
+      return true
+    if ((object.guardDevices?.length ?? 0) > 0 && object.devicesOnline === undefined) return true
   }
   return false
 }
@@ -181,25 +223,6 @@ function latencyTextClasses(latencyMs: number | null): string {
   if (latencyMs <= 100) return 'text-emerald-400'
   if (latencyMs <= 300) return 'text-amber-300'
   return 'text-red-400'
-}
-
-function statusText(
-  status: MonitoringPingStatus | 'unknown',
-  checking: boolean,
-  degraded = false
-): string {
-  if (checking) return 'Проверка'
-  if (degraded && status === 'online') return 'Частично'
-  switch (status) {
-    case 'online':
-      return 'Онлайн'
-    case 'offline':
-      return 'Офлайн'
-    case 'error':
-      return 'Ошибка'
-    default:
-      return 'Нет данных'
-  }
 }
 
 function linkConnectionText(status: MonitoringPingStatus | 'unknown', checking: boolean): string {
@@ -326,7 +349,7 @@ function EndpointIcon({ kind }: { kind: 'link' | 'server' }) {
 function CamerasIcon() {
   return (
     <span
-      className="inline-block h-6 w-6 bg-current"
+      className="inline-block h-5 w-5 bg-current"
       style={{
         WebkitMaskImage: `url(${cameraIconUrl})`,
         maskImage: `url(${cameraIconUrl})`,
@@ -345,7 +368,7 @@ function CamerasIcon() {
 function HornsIcon() {
   return (
     <span
-      className="inline-block h-6 w-6 bg-current"
+      className="inline-block h-5 w-5 bg-current"
       style={{
         WebkitMaskImage: `url(${hornIconUrl})`,
         maskImage: `url(${hornIconUrl})`,
@@ -361,6 +384,52 @@ function HornsIcon() {
   )
 }
 
+function SensorsIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-5 w-5" fill="currentColor" aria-hidden>
+      <path d="M8.075 7.997a1 1 0 0 1-1.05-1.216L5.604 5.14l.534-.534L7.78 6.024a1 1 0 0 1 1.216 1.05L10.068 8 9 9.068l-.925-1.07Z" />
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M10 12.659a6 6 0 1 0-4 0V13H4v2h8v-2h-2v-.341ZM12 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"
+      />
+    </svg>
+  )
+}
+
+type SensorIndicatorStatus = 'ok' | 'warning' | 'error' | 'unknown' | 'muted'
+
+function sensorStatusClass(status: SensorIndicatorStatus): string {
+  switch (status) {
+    case 'ok':
+      return 'text-emerald-400'
+    case 'warning':
+      return 'text-amber-300'
+    case 'error':
+      return 'text-red-400'
+    default:
+      return 'text-label-tertiary'
+  }
+}
+
+/** Green / yellow / red / gray for the Датчики indicator. */
+function resolveSensorsIndicatorStatus(
+  guardDevices: MonitoringGuardDevice[] | undefined,
+  devicesOnline: number | undefined,
+  linkOnline: boolean,
+  serverOnline: boolean
+): SensorIndicatorStatus {
+  if (!linkOnline || !serverOnline) return 'muted'
+  // List not loaded yet, or probe still in flight / no response.
+  if (guardDevices === undefined || (guardDevices.length > 0 && devicesOnline === undefined)) {
+    return 'unknown'
+  }
+  // No sources, or none connected.
+  if (guardDevices.length === 0 || devicesOnline === 0) return 'error'
+  if (devicesOnline === guardDevices.length) return 'ok'
+  return 'warning'
+}
+
 function ratioStatusClass(online: number, total: number): string {
   if (total <= 0) return 'text-label-tertiary/50'
   if (online <= 0) return 'text-red-400'
@@ -370,13 +439,22 @@ function ratioStatusClass(online: number, total: number): string {
 
 /** Stub host metrics until OWL.Guard exposes real CPU/GPU/RAM/uptime. */
 type ServerResourceStubs = {
-  cpuLoad: number
-  cpuTempC: number
-  gpuLoad: number
-  gpuTempC: number
-  ramLoad: number
+  cpuLoad: number | null
+  cpuTempC: number | null
+  gpuLoad: number | null
+  gpuTempC: number | null
+  ramLoad: number | null
   /** Uptime in whole days. */
-  uptimeDays: number
+  uptimeDays: number | null
+}
+
+const EMPTY_SERVER_RESOURCES: ServerResourceStubs = {
+  cpuLoad: null,
+  cpuTempC: null,
+  gpuLoad: null,
+  gpuTempC: null,
+  ramLoad: null,
+  uptimeDays: null
 }
 
 const DEBUG_SERVER_RESOURCES: ServerResourceStubs = {
@@ -391,17 +469,24 @@ const DEBUG_SERVER_RESOURCES: ServerResourceStubs = {
 /** Alternate CPU/GPU load ↔ temperature in the server caption. */
 const RESOURCE_METRIC_FLIP_MS = 5000
 const RESOURCE_METRIC_FADE_MS = 700
+const RESOURCE_UNAVAILABLE = 'Н/Д'
 
-function resourceLoadTextClass(loadPercent: number): string {
+function formatResourceLoad(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? RESOURCE_UNAVAILABLE : `${Math.round(value)}%`
+}
+
+function formatResourceTemp(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? RESOURCE_UNAVAILABLE : `${Math.round(value)}°C`
+}
+
+function resourceLoadTextClass(loadPercent: number | null | undefined): string {
+  if (loadPercent === null || loadPercent === undefined || !Number.isFinite(loadPercent)) return 'text-label-tertiary'
   return loadPercent > 85 ? 'text-red-400' : 'text-label-tertiary'
 }
 
-function resourceTempTextClass(tempC: number): string {
+function resourceTempTextClass(tempC: number | null | undefined): string {
+  if (tempC === null || tempC === undefined || !Number.isFinite(tempC)) return 'text-label-tertiary'
   return tempC > 85 ? 'text-red-400' : 'text-label-tertiary'
-}
-
-function formatServerResourcesTitle(resources: ServerResourceStubs): string {
-  return `CPU ${Math.round(resources.cpuLoad)}% / ${Math.round(resources.cpuTempC)}°C · GPU ${Math.round(resources.gpuLoad)}% / ${Math.round(resources.gpuTempC)}°C · RAM ${Math.round(resources.ramLoad)}%`
 }
 
 function FlippingMetricValue({
@@ -417,7 +502,7 @@ function FlippingMetricValue({
   loadClass: string
   tempClass: string
 }) {
-  // Fixed slot for up to 3 digits + unit (`100%` / `100°C`), centered so flips don't shift.
+  // Fixed slot for up to 3 digits + unit (`100%` / `100°C` / `Н/Д`), centered so flips don't shift.
   return (
     <span className="relative inline-grid w-[5ch] place-items-center text-center tabular-nums">
       <span
@@ -440,6 +525,36 @@ function FlippingMetricValue({
   )
 }
 
+function ResourceMetricValue({
+  load,
+  temp,
+  showTemp
+}: {
+  load: number | null
+  temp?: number | null
+  showTemp: boolean
+}) {
+  const hasTemp = temp !== undefined
+  const loadLabel = formatResourceLoad(load)
+  const tempLabel = hasTemp ? formatResourceTemp(temp) : loadLabel
+  const loadClass = resourceLoadTextClass(load)
+  const tempClass = hasTemp ? resourceTempTextClass(temp) : loadClass
+
+  if (!hasTemp || (load === null && temp === null)) {
+    return <span className={`inline-grid w-[5ch] place-items-center text-center tabular-nums ${loadClass}`}>{loadLabel}</span>
+  }
+
+  return (
+    <FlippingMetricValue
+      loadLabel={loadLabel}
+      tempLabel={tempLabel}
+      showTemp={showTemp}
+      loadClass={loadClass}
+      tempClass={tempClass}
+    />
+  )
+}
+
 function ServerResourcesCaption({ resources, now }: { resources: ServerResourceStubs; now: number }) {
   const showTemp = Math.floor(now / RESOURCE_METRIC_FLIP_MS) % 2 === 1
   const cpuClass = showTemp
@@ -451,45 +566,27 @@ function ServerResourcesCaption({ resources, now }: { resources: ServerResourceS
   const ramClass = resourceLoadTextClass(resources.ramLoad)
 
   return (
-    <span className="inline-flex max-w-full items-baseline gap-x-1.5 overflow-hidden font-mono text-[12px] leading-4 tracking-tight text-label-tertiary">
-      <span className={`inline-flex shrink-0 items-baseline gap-x-1 transition-colors ease-in-out ${cpuClass}`} style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}>
+    <span className="inline-flex max-w-full items-center gap-x-1.5 overflow-hidden font-mono text-[12px] leading-4 tracking-tight text-label-tertiary">
+      <span className={`inline-flex shrink-0 items-center gap-x-1 transition-colors ease-in-out ${cpuClass}`} style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}>
         <span>CPU</span>
-        <FlippingMetricValue
-          loadLabel={`${Math.round(resources.cpuLoad)}%`}
-          tempLabel={`${Math.round(resources.cpuTempC)}°C`}
-          showTemp={showTemp}
-          loadClass={resourceLoadTextClass(resources.cpuLoad)}
-          tempClass={resourceTempTextClass(resources.cpuTempC)}
-        />
+        <ResourceMetricValue load={resources.cpuLoad} temp={resources.cpuTempC} showTemp={showTemp} />
       </span>
-      <span className="shrink-0 text-label-tertiary/70" aria-hidden>
+      <span className="inline-flex shrink-0 items-center justify-center leading-none text-label-tertiary/70" aria-hidden>
         ·
       </span>
-      <span className={`inline-flex shrink-0 items-baseline gap-x-1 transition-colors ease-in-out ${gpuClass}`} style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}>
+      <span className={`inline-flex shrink-0 items-center gap-x-1 transition-colors ease-in-out ${gpuClass}`} style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}>
         <span>GPU</span>
-        <FlippingMetricValue
-          loadLabel={`${Math.round(resources.gpuLoad)}%`}
-          tempLabel={`${Math.round(resources.gpuTempC)}°C`}
-          showTemp={showTemp}
-          loadClass={resourceLoadTextClass(resources.gpuLoad)}
-          tempClass={resourceTempTextClass(resources.gpuTempC)}
-        />
+        <ResourceMetricValue load={resources.gpuLoad} temp={resources.gpuTempC} showTemp={showTemp} />
       </span>
-      <span className="shrink-0 text-label-tertiary/70" aria-hidden>
+      <span className="inline-flex shrink-0 items-center justify-center leading-none text-label-tertiary/70" aria-hidden>
         ·
       </span>
-      <span className={`inline-flex min-w-0 shrink items-baseline gap-x-1 ${ramClass}`}>
+      <span className={`inline-flex min-w-0 shrink items-center gap-x-1 ${ramClass}`}>
         <span>RAM</span>
-        <span className="tabular-nums">{Math.round(resources.ramLoad)}%</span>
+        <ResourceMetricValue load={resources.ramLoad} showTemp={false} />
       </span>
     </span>
   )
-}
-
-function formatUptimeDays(days: number | null | undefined): string | null {
-  if (days === null || days === undefined || !Number.isFinite(days)) return null
-  const whole = Math.max(0, Math.floor(days))
-  return `аптайм ${whole}д`
 }
 
 function MetricCountSpinner() {
@@ -501,6 +598,530 @@ function MetricCountSpinner() {
   )
 }
 
+function extractIpFromStreamUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+
+  try {
+    const host = new URL(url).hostname
+    if (isValidIPv4(host)) return host
+  } catch {
+    // Some RTSP forms are not URL-parseable — fall through to regex.
+  }
+
+  const match = url.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)
+  if (!match) return null
+  return isValidIPv4(match[0]) ? match[0] : null
+}
+
+function sameNumberList(a: number[] | undefined, b: number[]): boolean {
+  if (!a || a.length !== b.length) return false
+  const left = [...a].sort((x, y) => x - y)
+  const right = [...b].sort((x, y) => x - y)
+  return left.every((value, index) => value === right[index])
+}
+
+function buildLocationNameMap(locations?: MonitoringLocation[] | null): Map<number, string> | null {
+  if (!locations?.length) return null
+  return new Map(locations.map((location) => [location.id, location.localizedName]))
+}
+
+function ScrollingLine({
+  text,
+  className = ''
+}: {
+  text: string
+  className?: string
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const textRef = useRef<HTMLSpanElement>(null)
+  const [shiftPx, setShiftPx] = useState(0)
+
+  useEffect(() => {
+    const container = containerRef.current
+    const el = textRef.current
+    if (!container || !el) return
+
+    const update = (): void => {
+      setShiftPx(Math.max(0, el.scrollWidth - container.clientWidth))
+    }
+
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(container)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [text])
+
+  const durationSec = Math.max(6, Math.round(shiftPx / 18) + 4)
+
+  return (
+    <div ref={containerRef} className={`min-h-[1.125rem] overflow-hidden ${className}`}>
+      <span
+        ref={textRef}
+        className="inline-block max-w-none whitespace-nowrap will-change-transform"
+        style={
+          shiftPx > 0
+            ? {
+                ['--marquee-shift' as string]: `-${shiftPx}px`,
+                animation: `monitoring-marquee ${durationSec}s linear infinite`
+              }
+            : undefined
+        }
+      >
+        {text}
+      </span>
+    </div>
+  )
+}
+
+function formatCameraStreamsTooltip(
+  streams: MonitoringCameraStream[],
+  onlineIds?: number[] | null,
+  locations?: MonitoringLocation[] | null
+): ReactNode {
+  const sorted = [...streams].sort((a, b) => {
+    const aLocationId = a.stream?.locationId
+    const bLocationId = b.stream?.locationId
+    const aHasLocation = typeof aLocationId === 'number'
+    const bHasLocation = typeof bLocationId === 'number'
+    if (aHasLocation && bHasLocation && aLocationId !== bLocationId) {
+      return aLocationId - bLocationId
+    }
+    if (aHasLocation !== bHasLocation) return aHasLocation ? -1 : 1
+    return a.id - b.id
+  })
+
+  const items = sorted.map((stream) => ({
+    id: stream.id,
+    locationId: typeof stream.stream?.locationId === 'number' ? stream.stream.locationId : null,
+    ip: extractIpFromStreamUrl(stream.stream?.url)
+  }))
+
+  return formatDeviceStatusesTooltip('Статусы камер', items, onlineIds, locations, true)
+}
+
+function formatMegaphoneLocationId(megaphone: MonitoringMegaphone): number | null {
+  const locationId = megaphone.locationIds.find((id) => Number.isFinite(id))
+  return locationId !== undefined ? locationId : null
+}
+
+/** Friendly labels for known guard device types (`config.type`). */
+const GUARD_DEVICE_TYPE_LABELS: Record<string, string> = {
+  ive50: 'ИВЭ-50',
+  del150: 'ДЭЛ-150',
+  wits: 'WITS',
+  witsml: 'WITSML',
+  redis: 'Ригинтел'
+}
+
+function formatGuardDeviceTypeLabel(type: string): string {
+  const trimmed = type.trim()
+  if (!trimmed || trimmed === '—') return '—'
+  const mapped = GUARD_DEVICE_TYPE_LABELS[trimmed.toLowerCase()]
+  if (mapped) return mapped
+  // Keep mixed Cyrillic/digits (ИВЭ-50) as-is; uppercase plain latin tokens.
+  if (/[а-яё]/i.test(trimmed)) return trimmed
+  return trimmed.toUpperCase()
+}
+
+type SensorDeviceLabel = {
+  id: string
+  label: string
+  status: SensorIndicatorStatus
+}
+
+/** Per-device labels for the sensors row (cycled when several; color = that device). */
+function listSensorsDeviceLabels(
+  devices: MonitoringGuardDevice[] | undefined,
+  onlineIds: number[] | null | undefined,
+  linkOnline: boolean,
+  serverOnline: boolean
+): SensorDeviceLabel[] {
+  // List not fetched yet — keep gray "Датчики", same as the icon.
+  if (devices === undefined) {
+    return [
+      {
+        id: 'pending',
+        label: 'Датчики',
+        status: !linkOnline || !serverOnline ? 'muted' : 'unknown'
+      }
+    ]
+  }
+
+  // Loaded empty — no sources.
+  if (devices.length === 0) {
+    return [
+      {
+        id: 'empty',
+        label: 'Датчики',
+        status: !linkOnline || !serverOnline ? 'muted' : 'error'
+      }
+    ]
+  }
+
+  const onlineSet = onlineIds ? new Set(onlineIds) : null
+  return devices.map((device) => {
+    const label = formatGuardDeviceTypeLabel(device.type)
+    let status: SensorIndicatorStatus = 'unknown'
+    if (!linkOnline || !serverOnline) status = 'muted'
+    else if (onlineSet) status = onlineSet.has(device.id) ? 'ok' : 'error'
+    return { id: String(device.id), label, status }
+  })
+}
+
+function FlippingSensorLabels({ entries, now }: { entries: SensorDeviceLabel[]; now: number }) {
+  if (entries.length <= 1) {
+    const entry = entries[0] ?? { id: 'empty', label: 'Датчики', status: 'unknown' as const }
+    const statusClass = sensorStatusClass(entry.status)
+    return (
+      <span
+        className={`w-full truncate text-center transition-colors ease-in-out ${statusClass}`}
+        style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}
+      >
+        {entry.label}
+      </span>
+    )
+  }
+
+  const index = Math.floor(now / RESOURCE_METRIC_FLIP_MS) % entries.length
+  return (
+    <span className="relative inline-grid w-full max-w-full place-items-center text-center">
+      {entries.map((entry, entryIndex) => {
+        const statusClass = sensorStatusClass(entry.status)
+        return (
+          <span
+            key={entry.id}
+            className={`col-start-1 row-start-1 max-w-full truncate text-center transition-[opacity,color] ease-in-out ${statusClass} ${
+              entryIndex === index ? 'opacity-100' : 'pointer-events-none opacity-0'
+            }`}
+            style={{ transitionDuration: `${RESOURCE_METRIC_FADE_MS}ms` }}
+            aria-hidden={entryIndex !== index}
+          >
+            {entry.label}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+function formatGuardDevicesTooltip(
+  devices: MonitoringGuardDevice[],
+  onlineIds?: number[] | null
+): ReactNode {
+  if (devices.length === 0) {
+    return (
+      <div className="flex cursor-default select-none flex-col gap-2">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-tint-blue">
+          Датчики
+        </div>
+        <div className="text-[13px] font-medium leading-snug text-label-secondary">
+          Источники не найдены
+        </div>
+      </div>
+    )
+  }
+
+  const columnCount = devices.length <= 6 ? 1 : devices.length <= 14 ? 2 : 3
+  const onlineSet = onlineIds ? new Set(onlineIds) : null
+  const sorted = [...devices].sort((a, b) => {
+    const typeCmp = formatGuardDeviceTypeLabel(a.type).localeCompare(
+      formatGuardDeviceTypeLabel(b.type),
+      'ru'
+    )
+    if (typeCmp !== 0) return typeCmp
+    return (a.address ?? '').localeCompare(b.address ?? '', 'ru')
+  })
+
+  return (
+    <div className="flex cursor-default select-none flex-col gap-2">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-tint-blue">
+        Источники датчиков
+      </div>
+      <ul
+        className="m-0 list-none p-0"
+        style={{
+          columnCount,
+          columnGap: '1.25rem'
+        }}
+      >
+        {sorted.map((device) => {
+          const isOnline = onlineSet?.has(device.id)
+          return (
+            <li
+              key={device.id}
+              className="mb-2 flex min-w-[11rem] max-w-[16rem] break-inside-avoid items-center gap-2 last:mb-0"
+            >
+              {onlineSet ? (
+                <span
+                  className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                    isOnline ? 'bg-emerald-400' : 'bg-red-400'
+                  }`}
+                  aria-label={isOnline ? 'онлайн' : 'офлайн'}
+                />
+              ) : null}
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] font-medium leading-snug text-label-primary">
+                <span className="min-w-0 truncate">{formatGuardDeviceTypeLabel(device.type)}</span>
+                <span className="shrink-0 font-normal tabular-nums text-label-tertiary">
+                  [{device.address || '—'}]
+                </span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+function formatMegaphonesTooltip(
+  megaphones: MonitoringMegaphone[],
+  onlineIds?: number[] | null,
+  locations?: MonitoringLocation[] | null
+): ReactNode {
+  const sorted = [...megaphones].sort((a, b) => {
+    const aLocationId = formatMegaphoneLocationId(a)
+    const bLocationId = formatMegaphoneLocationId(b)
+    const aHasLocation = aLocationId !== null
+    const bHasLocation = bLocationId !== null
+    if (aHasLocation && bHasLocation && aLocationId !== bLocationId) {
+      return aLocationId - bLocationId
+    }
+    if (aHasLocation !== bHasLocation) return aHasLocation ? -1 : 1
+    return a.id - b.id
+  })
+
+  const items = sorted.map((megaphone) => ({
+    id: megaphone.id,
+    locationId: formatMegaphoneLocationId(megaphone),
+    ip: megaphone.address && isValidIPv4(megaphone.address) ? megaphone.address : megaphone.address || null
+  }))
+
+  return formatDeviceStatusesTooltip('Статусы рупоров', items, onlineIds, locations, false)
+}
+
+function formatDeviceStatusesTooltip(
+  title: string,
+  items: Array<{ id: number; locationId: number | null; ip: string | null }>,
+  onlineIds?: number[] | null,
+  locations?: MonitoringLocation[] | null,
+  linkIp = false
+): ReactNode {
+  const columnCount = items.length <= 6 ? 1 : items.length <= 14 ? 2 : 3
+  const onlineSet = onlineIds ? new Set(onlineIds) : null
+  const locationNames = buildLocationNameMap(locations)
+  const locationOccurrence = new Map<string, number>()
+
+  return (
+    <div className="flex cursor-default select-none flex-col gap-2">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-tint-blue">{title}</div>
+      <ul
+        className="m-0 list-none p-0"
+        style={{
+          columnCount,
+          columnGap: '1.25rem'
+        }}
+      >
+        {items.map((item) => {
+          const baseLocation =
+            item.locationId !== null
+              ? locationNames?.get(item.locationId) || String(item.locationId)
+              : '—'
+          const occurrence = (locationOccurrence.get(baseLocation) ?? 0) + 1
+          locationOccurrence.set(baseLocation, occurrence)
+          const locationLabel = occurrence === 1 ? baseLocation : `${baseLocation} ${occurrence}`
+          const isOnline = onlineSet?.has(item.id)
+          const ip = item.ip
+
+          return (
+            <li
+              key={item.id}
+              className="mb-2 flex min-w-[11rem] max-w-[16rem] break-inside-avoid items-center gap-2 last:mb-0"
+            >
+              {onlineSet ? (
+                <span
+                  className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                    isOnline ? 'bg-emerald-400' : 'bg-red-400'
+                  }`}
+                  aria-label={isOnline ? 'онлайн' : 'офлайн'}
+                />
+              ) : null}
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] font-medium leading-snug text-label-primary">
+                <span className="min-w-0 truncate">{locationLabel}</span>
+                <span className="shrink-0 font-normal tabular-nums text-label-tertiary">
+                  [
+                  {ip && linkIp ? (
+                    <button
+                      type="button"
+                      className="cursor-pointer border-0 bg-transparent p-0 font-inherit tabular-nums text-label-tertiary transition-colors hover:text-label-secondary hover:underline"
+                      title={`Открыть http://${ip}`}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        void window.api?.openExternal(`http://${ip}`)
+                      }}
+                    >
+                      {ip}
+                    </button>
+                  ) : (
+                    ip || '—'
+                  )}
+                  ]
+                </span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+type MetricTooltipPlacement = {
+  left: number
+  top: number
+  maxHeight: number | undefined
+  side: 'above' | 'below'
+  arrowLeft: number
+}
+
+function MetricHoverTooltip({
+  children,
+  anchorEl,
+  onMouseEnter,
+  onMouseLeave,
+  onRefresh,
+  refreshing = false
+}: {
+  children: ReactNode
+  anchorEl: HTMLElement | null
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
+  onRefresh?: () => void
+  refreshing?: boolean
+}) {
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [placement, setPlacement] = useState<MetricTooltipPlacement | null>(null)
+
+  useLayoutEffect(() => {
+    if (!anchorEl) return
+
+    const update = (): void => {
+      const tip = tooltipRef.current
+      const content = contentRef.current
+      if (!tip || !content) return
+
+      const gap = 8
+      const padding = 8
+      const arrowInset = 12
+      const anchor = anchorEl.getBoundingClientRect()
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const spaceAbove = Math.max(0, anchor.top - padding - gap)
+      const spaceBelow = Math.max(0, vh - anchor.bottom - padding - gap)
+      const available = Math.max(spaceAbove, spaceBelow)
+      const maxCap = Math.min(vh - padding * 2, available)
+
+      // Measure natural size without a height cap (columns keep the list short).
+      content.style.maxHeight = 'none'
+      content.style.overflowY = 'visible'
+      const naturalHeight = tip.offsetHeight
+      const tipWidth = tip.offsetWidth
+
+      let side: 'above' | 'below' = spaceAbove >= spaceBelow ? 'above' : 'below'
+      const spaceForSide = side === 'above' ? spaceAbove : spaceBelow
+      const needsScroll = naturalHeight > spaceForSide + 1
+      // Prefer the side with more room if we would otherwise need to scroll.
+      if (needsScroll && (side === 'above' ? spaceBelow : spaceAbove) > spaceForSide) {
+        side = side === 'above' ? 'below' : 'above'
+      }
+
+      const finalSpace = side === 'above' ? spaceAbove : spaceBelow
+      const maxHeight = naturalHeight > finalSpace + 1 ? Math.max(96, Math.min(maxCap, finalSpace)) : undefined
+      content.style.maxHeight = maxHeight !== undefined ? `${maxHeight}px` : 'none'
+      content.style.overflowY = maxHeight !== undefined ? 'auto' : 'visible'
+
+      const tipHeight = tip.offsetHeight
+      let left = anchor.left + anchor.width / 2 - tipWidth / 2
+      left = Math.max(padding, Math.min(left, vw - tipWidth - padding))
+
+      let top = side === 'above' ? anchor.top - gap - tipHeight : anchor.bottom + gap
+      top = Math.max(padding, Math.min(top, vh - tipHeight - padding))
+
+      const anchorCenterX = anchor.left + anchor.width / 2
+      const arrowLeft = Math.max(arrowInset, Math.min(anchorCenterX - left, tip.offsetWidth - arrowInset))
+
+      setPlacement({ left, top, maxHeight, side, arrowLeft })
+    }
+
+    update()
+    const frame = window.requestAnimationFrame(update)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [anchorEl, children])
+
+  if (!anchorEl) return null
+
+  return createPortal(
+    <div
+      ref={tooltipRef}
+      role="tooltip"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      style={{
+        position: 'fixed',
+        left: placement?.left ?? 0,
+        top: placement?.top ?? 0,
+        zIndex: 9999,
+        visibility: placement ? 'visible' : 'hidden'
+      }}
+      className="relative w-max max-w-[min(48rem,calc(100vw-1rem))] cursor-default select-none rounded-lg border border-surface-border/80 bg-surface-raised shadow-sheet"
+    >
+      {onRefresh ? (
+        <button
+          type="button"
+          className="absolute right-1.5 top-1.5 z-10 flex h-7 w-7 items-center justify-center rounded-md text-label-secondary transition-colors hover:bg-white/[0.06] hover:text-label-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 disabled:cursor-default disabled:opacity-60"
+          title="Обновить"
+          aria-label="Обновить данные"
+          aria-busy={refreshing}
+          disabled={refreshing}
+          onClick={onRefresh}
+        >
+          <ArrowPathIcon className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+        </button>
+      ) : null}
+      <div
+        ref={contentRef}
+        className={`overscroll-contain py-2.5 pl-3 ${onRefresh ? 'pr-11' : 'pr-3'}`}
+        style={{
+          maxHeight: placement?.maxHeight,
+          overflowY: placement?.maxHeight !== undefined ? 'auto' : 'visible'
+        }}
+      >
+        {children}
+      </div>
+      {placement ? (
+        <span
+          aria-hidden
+          className={`pointer-events-none absolute h-2 w-2 rotate-45 border-surface-border/80 bg-surface-raised ${
+            placement.side === 'above'
+              ? '-bottom-[5px] border-b border-r'
+              : '-top-[5px] border-l border-t'
+          }`}
+          style={{ left: placement.arrowLeft, transform: 'translateX(-50%) rotate(45deg)' }}
+        />
+      ) : null}
+    </div>,
+    document.body
+  )
+}
+
 function ObjectMetricStatus({
   label,
   online,
@@ -509,7 +1130,10 @@ function ObjectMetricStatus({
   muted = false,
   onlineUnknown = false,
   loading = false,
-  failed = false
+  failed = false,
+  hoverTooltip = null,
+  onRefresh,
+  refreshing = false
 }: {
   label: string
   /** `null` — сервер ещё не ответил числом online. */
@@ -523,7 +1147,14 @@ function ObjectMetricStatus({
   loading?: boolean
   /** Last probe failed — keep ?/N without an endless spinner. */
   failed?: boolean
+  /** Rich hover tip (e.g. camera list). When set, replaces the native title. */
+  hoverTooltip?: ReactNode
+  onRefresh?: () => void
+  refreshing?: boolean
 }) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const hideTimerRef = useRef<number | undefined>(undefined)
+  const [hovered, setHovered] = useState(false)
   const hasOnlineValue = online !== null && !onlineUnknown && !loading && !failed
   const statusClass =
     muted || onlineUnknown || loading || failed || online === null
@@ -532,34 +1163,149 @@ function ObjectMetricStatus({
         : 'text-label-tertiary'
       : ratioStatusClass(online, total)
   const onlineLabel = onlineUnknown || online === null || failed ? '?' : String(online)
-  const title = loading
-    ? `${label}: ${METRICS_LOADING}`
-    : failed
-      ? `${label}: ${METRICS_UNAVAILABLE}`
-      : `${label}: ${onlineLabel}/${total}`
+  const openTooltip = (): void => {
+    if (!hoverTooltip) return
+    if (hideTimerRef.current !== undefined) {
+      window.clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = undefined
+    }
+    setHovered(true)
+  }
+
+  const scheduleCloseTooltip = (): void => {
+    if (hideTimerRef.current !== undefined) window.clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = window.setTimeout(() => {
+      setHovered(false)
+      hideTimerRef.current = undefined
+    }, 120)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current !== undefined) window.clearTimeout(hideTimerRef.current)
+    }
+  }, [])
 
   return (
-    <>
-      <span className={`flex h-7 w-7 shrink-0 items-center justify-center ${statusClass}`} title={title}>
+    <div
+      ref={rootRef}
+      className={`-mx-1 grid grid-cols-[1.5rem_auto] items-center gap-x-2 rounded-lg px-1 py-0.5 transition-colors duration-150 ${
+        hovered && hoverTooltip
+          ? 'bg-white/[0.035]'
+          : 'bg-transparent'
+      }`}
+      onMouseEnter={openTooltip}
+      onMouseLeave={scheduleCloseTooltip}
+      aria-label={`${label}: ${onlineLabel}/${total}`}
+    >
+      <span className={`flex h-6 w-6 shrink-0 items-center justify-center ${statusClass}`}>
         {icon}
       </span>
       <p
-        className={`m-0 flex h-6 min-w-0 items-center font-mono text-[18px] font-semibold leading-6 tracking-tight tabular-nums ${
+        className={`m-0 flex h-5 min-w-0 items-center font-mono text-[15px] font-semibold leading-5 tracking-tight tabular-nums ${
           muted || onlineUnknown || loading || failed || !hasOnlineValue
             ? failed && !muted
               ? 'text-amber-300'
               : 'text-label-tertiary'
             : 'text-label-primary'
         }`}
-        title={title}
       >
-        <span className="inline-flex h-6 w-[2ch] shrink-0 items-center justify-end">
+        <span className="inline-flex h-5 w-[2ch] shrink-0 items-center justify-end">
           {loading ? <MetricCountSpinner /> : onlineLabel}
         </span>
         <span className="shrink-0">/</span>
-        <span className="inline-flex h-6 min-w-[2ch] items-center">{total}</span>
+        <span className="inline-flex h-5 min-w-[2ch] items-center">{total}</span>
       </p>
-    </>
+      {hovered && hoverTooltip ? (
+        <MetricHoverTooltip
+          anchorEl={rootRef.current}
+          onMouseEnter={openTooltip}
+          onMouseLeave={scheduleCloseTooltip}
+          onRefresh={onRefresh}
+          refreshing={refreshing}
+        >
+          {hoverTooltip}
+        </MetricHoverTooltip>
+      ) : null}
+    </div>
+  )
+}
+
+function ObjectIndicatorStatus({
+  entries,
+  status,
+  icon,
+  now,
+  hoverTooltip = null,
+  onRefresh,
+  refreshing = false
+}: {
+  entries: SensorDeviceLabel[]
+  status: SensorIndicatorStatus
+  icon: ReactNode
+  now: number
+  hoverTooltip?: ReactNode
+  onRefresh?: () => void
+  refreshing?: boolean
+}) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const hideTimerRef = useRef<number | undefined>(undefined)
+  const [hovered, setHovered] = useState(false)
+  const iconStatusClass = sensorStatusClass(status)
+  const activeIndex = entries.length > 0 ? Math.floor(now / RESOURCE_METRIC_FLIP_MS) % entries.length : 0
+  const activeEntry = entries[activeIndex]
+  const ariaLabel = activeEntry?.label || 'Датчики'
+
+  const openTooltip = (): void => {
+    if (!hoverTooltip) return
+    if (hideTimerRef.current !== undefined) {
+      window.clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = undefined
+    }
+    setHovered(true)
+  }
+
+  const scheduleCloseTooltip = (): void => {
+    if (hideTimerRef.current !== undefined) window.clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = window.setTimeout(() => {
+      setHovered(false)
+      hideTimerRef.current = undefined
+    }, 120)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current !== undefined) window.clearTimeout(hideTimerRef.current)
+    }
+  }, [])
+
+  return (
+    <div
+      ref={rootRef}
+      className={`-mx-1 grid grid-cols-[1.5rem_auto] items-center gap-x-2 rounded-lg px-1 py-0.5 transition-colors duration-150 ${
+        hovered && hoverTooltip ? 'bg-white/[0.035]' : 'bg-transparent'
+      }`}
+      onMouseEnter={openTooltip}
+      onMouseLeave={scheduleCloseTooltip}
+    >
+      <span className={`flex h-6 w-6 shrink-0 items-center justify-center ${iconStatusClass}`} aria-label={ariaLabel}>
+        {icon}
+      </span>
+      <span className="m-0 flex h-5 min-w-0 items-center justify-center font-mono text-[12px] font-semibold leading-5 tracking-tight">
+        <FlippingSensorLabels entries={entries} now={now} />
+      </span>
+      {hovered && hoverTooltip ? (
+        <MetricHoverTooltip
+          anchorEl={rootRef.current}
+          onMouseEnter={openTooltip}
+          onMouseLeave={scheduleCloseTooltip}
+          onRefresh={onRefresh}
+          refreshing={refreshing}
+        >
+          {hoverTooltip}
+        </MetricHoverTooltip>
+      ) : null}
+    </div>
   )
 }
 
@@ -993,7 +1739,7 @@ function EndpointStatus({
   unstable = false,
   serverResources = null,
   serverResourcesNow = 0,
-  serverUptimeDays = null,
+  serverVersion = null,
   serverVersionError = null
 }: {
   label: string
@@ -1010,8 +1756,8 @@ function EndpointStatus({
   /** Stub/live CPU/GPU/RAM metrics under «Сервер». */
   serverResources?: ServerResourceStubs | null
   serverResourcesNow?: number
-  /** Uptime in days, shown next to «Сервер». */
-  serverUptimeDays?: number | null
+  /** OWL.Guard version shown next to «Сервер». */
+  serverVersion?: string | null
   serverVersionError?: string | null
 }) {
   const status = result?.status ?? 'unknown'
@@ -1020,31 +1766,44 @@ function EndpointStatus({
       ? (averageLatencyMs ?? result?.latencyMs ?? null)
       : null
   const showPing = linkLatencyMs !== null && linkLatencyMs !== undefined
-  const showUnstable = kind === 'link' && unstable && status === 'online'
+  const showUnstable = kind === 'link' && unstable
   const serverNoReply = kind === 'server' && !muted && status === 'offline'
   const owlGuardFailed = kind === 'server' && !muted && status === 'error'
   const authOrVersionFailed = kind === 'server' && !muted && !!serverVersionError
+  // Unstable is styled only on its own subtitle fragment — icon/title/ping keep normal colors.
   const colorWarning =
-    showUnstable || owlGuardFailed || authOrVersionFailed || (degraded && status === 'online')
-  const uptimeLabel =
-    kind === 'server' && !muted && status === 'online' ? formatUptimeDays(serverUptimeDays) : null
-  const showResources = kind === 'server' && !muted && status === 'online' && !!serverResources
-  const resourcesTitle = showResources && serverResources ? formatServerResourcesTitle(serverResources) : null
-  // Visible line: factual data, except link flapping — shown in the ping subtitle.
+    owlGuardFailed || authOrVersionFailed || (degraded && status === 'online')
+  // Errors go under «Сервер» (same slot as load/temps); only a healthy version stays beside the title.
+  const serverErrorDetail =
+    kind === 'server' && !muted
+      ? serverNoReply
+        ? 'нет ответа'
+        : owlGuardFailed
+          ? OWL_GUARD_UNREACHABLE
+          : serverVersionError
+            ? serverVersionError
+            : degraded
+              ? METRICS_UNAVAILABLE
+              : null
+      : null
+  const versionLabel =
+    kind === 'server' && !muted && status === 'online' && serverVersion && !serverErrorDetail
+      ? formatServerVersionLabel(serverVersion)
+      : null
+  const showResources =
+    kind === 'server' && !muted && status === 'online' && !!serverResources && !serverErrorDetail
+  // Visible line: ping / connection text, with sticky flapping note when relevant.
+  const linkDetailBase = showPing
+    ? formatLatency(linkLatencyMs)
+    : linkConnectionText(status, checking)
   const detail =
     kind === 'link'
-      ? showUnstable
-        ? LINK_UNSTABLE
-        : showPing
-          ? formatLatency(linkLatencyMs)
-          : linkConnectionText(status, checking)
-      : showResources
-        ? null
-        : serverNoReply
-          ? 'нет ответа'
-          : owlGuardFailed
-            ? OWL_GUARD_UNREACHABLE
-            : host
+      ? linkDetailBase
+      : serverErrorDetail
+        ? serverErrorDetail
+        : showResources
+          ? null
+          : host
   const statusClass = muted
     ? 'text-label-tertiary'
     : colorWarning || serverNoReply
@@ -1054,77 +1813,54 @@ function EndpointStatus({
       : statusClasses(status, checking, degraded)
   const detailClass = muted
     ? 'text-label-tertiary'
-    : kind === 'link' && (showUnstable || showPing)
-      ? colorWarning || showUnstable
-        ? 'text-amber-300'
-        : latencyTextClasses(linkLatencyMs)
+    : kind === 'link' && showPing
+      ? latencyTextClasses(linkLatencyMs)
       : kind === 'link'
         ? checking || status === 'unknown' || status === 'offline'
           ? 'text-label-tertiary'
           : colorWarning
             ? 'text-amber-300'
             : statusClass
-        : serverNoReply
-          ? statusClass
-          : colorWarning
-            ? 'text-amber-300'
-            : 'text-label-tertiary'
-  const statusHint = muted
-    ? 'Связь недоступна'
-    : showUnstable
-      ? LINK_UNSTABLE
-      : serverNoReply
-        ? 'нет ответа'
-        : owlGuardFailed
-          ? OWL_GUARD_UNREACHABLE
-          : degraded && kind === 'server'
-            ? serverVersionError || METRICS_UNAVAILABLE
-            : authOrVersionFailed
-              ? serverVersionError
-              : statusText(status, checking, degraded)
-  const detailTitle = [
-    statusHint,
-    uptimeLabel,
-    showUnstable && showPing ? formatLatency(linkLatencyMs!) : null,
-    resourcesTitle,
-    host
-  ]
-    .filter((part): part is string => Boolean(part))
-    .filter((part, index, all) => all.indexOf(part) === index)
-    .join(' · ')
-
+        : serverErrorDetail || serverNoReply
+          ? serverNoReply
+            ? statusClass
+            : 'text-amber-300'
+          : 'text-label-tertiary'
   return (
-    <div className="min-h-[2.5rem] min-w-0 overflow-hidden" title={detailTitle}>
+    <div className="min-h-[2.5rem] min-w-0 overflow-hidden">
       <div className="flex min-w-0 items-start gap-3">
-        <span className={`flex h-10 w-10 shrink-0 items-center justify-center ${statusClass}`} title={statusHint}>
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center ${statusClass}`}>
           <EndpointIcon kind={kind} />
         </span>
         <div className="min-w-0 flex-1 overflow-hidden pt-0.5">
-          <p className={`m-0 flex min-w-0 items-baseline gap-1.5 text-[14px] leading-5 font-medium ${statusClass}`}>
-            <span className="truncate" title={statusHint}>
-              {label}
-            </span>
-            {uptimeLabel && (
-              <span
-                className="shrink-0 text-[11px] font-normal text-label-tertiary"
-                title={uptimeLabel}
-              >
-                {uptimeLabel}
+          <div className={`m-0 flex min-w-0 items-baseline gap-1.5 text-[14px] leading-5 font-medium ${statusClass}`}>
+            <span className="truncate">{label}</span>
+            {showUnstable && (
+              <span className="min-w-0 flex-1 truncate text-[11px] font-normal leading-[1.125rem] text-amber-300">
+                {LINK_UNSTABLE}
               </span>
             )}
-          </p>
-          <div
-            className={`mt-0.5 min-h-4 truncate ${
-              showPing && !showUnstable ? `font-mono text-[13px] leading-5 ${detailClass}` : showResources ? '' : `text-[13px] leading-5 ${detailClass}`
-            }`}
-            title={detailTitle}
-          >
-            {showResources && serverResources ? (
-              <ServerResourcesCaption resources={serverResources} now={serverResourcesNow} />
-            ) : (
-              detail
+            {versionLabel && (
+              <ScrollingLine
+                text={versionLabel}
+                className="min-w-0 flex-1 text-[11px] font-normal leading-[1.125rem] text-label-tertiary"
+              />
             )}
           </div>
+          {showResources && serverResources ? (
+            <div className="mt-0.5 min-h-4">
+              <ServerResourcesCaption resources={serverResources} now={serverResourcesNow} />
+            </div>
+          ) : detail ? (
+            <ScrollingLine
+              text={detail}
+              className={`mt-0.5 text-[13px] leading-[1.125rem] ${
+                showPing ? `font-mono ${detailClass}` : detailClass
+              }`}
+            />
+          ) : (
+            <div className="mt-0.5 min-h-4" />
+          )}
         </div>
       </div>
     </div>
@@ -1135,7 +1871,7 @@ function MonitoringObjectCard({
   object,
   results,
   latencyHistory,
-  linkStatusHistory,
+  linkUnstable = false,
   checkingLink,
   checkingServer,
   serverVersion,
@@ -1145,14 +1881,17 @@ function MonitoringObjectCard({
   megaphonesStatusLoading,
   camerasMetricFailed,
   megaphonesMetricFailed,
+  sensorsRefreshLoading = false,
   now,
   onEdit,
+  onRefreshMetric,
   debug = false
 }: {
   object: MonitoringObject
   results: ResultMap
   latencyHistory: LatencyHistoryMap
-  linkStatusHistory: LinkStatusHistoryMap
+  /** Sticky flapping flag — shown for both online and offline until recovery. */
+  linkUnstable?: boolean
   checkingLink: boolean
   checkingServer: boolean
   serverVersion: string | null
@@ -1162,14 +1901,15 @@ function MonitoringObjectCard({
   megaphonesStatusLoading: boolean
   camerasMetricFailed: boolean
   megaphonesMetricFailed: boolean
+  sensorsRefreshLoading?: boolean
   now: number
   onEdit?: (id: string) => void
+  onRefreshMetric?: (object: MonitoringObject, kind: MonitoringMetricKind) => void
   debug?: boolean
 }) {
   const linkResult = results[targetId(object.id, 'link')]
   const serverResult = results[targetId(object.id, 'server')]
   const linkAverageLatencyMs = averageLatency(latencyHistory[targetId(object.id, 'link')])
-  const linkUnstable = isLinkUnstable(linkStatusHistory[targetId(object.id, 'link')], now)
   const linkOnline = isOnline(linkResult)
   const serverOnline = linkOnline && isOnline(serverResult)
   const camerasTotal = object.camerasTotal ?? object.cameraStreams?.length ?? 0
@@ -1183,7 +1923,7 @@ function MonitoringObjectCard({
     !hasCameraOnline &&
     !camerasPreviewLoading &&
     camerasMetricFailed
-  const megaphonesTotal = object.megaphonesTotal ?? 0
+  const megaphonesTotal = object.megaphonesTotal ?? object.megaphones?.length ?? 0
   const hasMegaphoneOnline = object.megaphonesOnline !== undefined
   const awaitingFirstMegaphoneStatus =
     linkOnline && serverOnline && megaphonesTotal > 0 && !hasMegaphoneOnline && megaphonesStatusLoading
@@ -1196,11 +1936,53 @@ function MonitoringObjectCard({
     megaphonesMetricFailed
   const metricsDegraded =
     serverOnline && (camerasFailed || megaphonesFailed || Boolean(serverVersionError))
-  const versionLabel = serverVersion ? formatServerVersionLabel(serverVersion) : null
-  const headerVersion =
-    versionLabel ??
-    (serverVersionError && linkOnline ? serverVersionError : null)
-  const headerVersionError = !versionLabel && Boolean(serverVersionError && linkOnline)
+  const cameraStreams = object.cameraStreams
+  const camerasOnlineIdsForTooltip =
+    object.camerasOnlineIds !== undefined &&
+    object.camerasOnline !== undefined &&
+    object.camerasOnlineIds.length === object.camerasOnline
+      ? object.camerasOnlineIds
+      : null
+  const camerasHoverTooltip =
+    serverOnline && camerasTotal > 0 && cameraStreams && cameraStreams.length > 0
+      ? formatCameraStreamsTooltip(cameraStreams, camerasOnlineIdsForTooltip, object.locations)
+      : null
+  const megaphonesList = object.megaphones
+  const megaphonesOnlineIdsForTooltip =
+    object.megaphonesOnlineIds !== undefined &&
+    object.megaphonesOnline !== undefined &&
+    object.megaphonesOnlineIds.length === object.megaphonesOnline
+      ? object.megaphonesOnlineIds
+      : null
+  const megaphonesHoverTooltip =
+    serverOnline && megaphonesTotal > 0 && megaphonesList && megaphonesList.length > 0
+      ? formatMegaphonesTooltip(megaphonesList, megaphonesOnlineIdsForTooltip, object.locations)
+      : null
+  const guardDevices = object.guardDevices
+  const devicesOnlineIdsForTooltip =
+    object.devicesOnlineIds !== undefined &&
+    object.devicesOnline !== undefined &&
+    object.devicesOnlineIds.length === object.devicesOnline
+      ? object.devicesOnlineIds
+      : null
+  const sensorsHoverTooltip =
+    serverOnline && guardDevices !== undefined
+      ? formatGuardDevicesTooltip(guardDevices, devicesOnlineIdsForTooltip)
+      : null
+  const resolvedSensorsStatus = resolveSensorsIndicatorStatus(
+    guardDevices,
+    object.devicesOnline,
+    linkOnline,
+    serverOnline
+  )
+  const sensorsDeviceLabels = listSensorsDeviceLabels(
+    guardDevices,
+    devicesOnlineIdsForTooltip,
+    linkOnline,
+    serverOnline
+  )
+  const primaryLocationName =
+    object.primaryLocationName?.trim() || resolvePrimaryLocationName(object.locations) || null
 
   return (
     <Card
@@ -1214,16 +1996,10 @@ function MonitoringObjectCard({
               </span>
             )}
           </span>
-          {headerVersion && (
-            <span
-              className={`max-w-full truncate text-[12px] font-medium normal-case tracking-normal ${
-                headerVersionError ? 'text-amber-300' : 'text-label-tertiary'
-              }`}
-              title={headerVersion}
-            >
-              {headerVersion}
-            </span>
-          )}
+          <ScrollingLine
+            text={primaryLocationName || '\u00A0'}
+            className="max-w-full text-[12px] font-medium leading-[1.125rem] normal-case tracking-normal text-label-tertiary"
+          />
         </span>
       }
       action={
@@ -1235,7 +2011,6 @@ function MonitoringObjectCard({
             }}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:bg-white/[0.05] hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45"
             aria-label="Открыть сервер в браузере"
-            title={`Открыть http://${object.serverHost}`}
           >
             <OpenExternalIcon />
           </button>
@@ -1273,22 +2048,25 @@ function MonitoringObjectCard({
             degraded={metricsDegraded}
             serverResources={serverOnline ? serverResources : null}
             serverResourcesNow={now}
-            serverUptimeDays={serverOnline ? serverResources?.uptimeDays ?? null : null}
+            serverVersion={serverOnline ? serverVersion : null}
             serverVersionError={linkOnline ? serverVersionError : null}
           />
         </div>
 
-        <div className="flex shrink-0 flex-col justify-center border-t border-surface-border/70 pt-3 sm:min-w-[7.5rem] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
-          <div className="mx-auto grid w-fit grid-cols-[1.75rem_auto] items-center gap-x-2.5 gap-y-3 sm:mx-0">
+        <div className="flex h-full shrink-0 flex-col border-t border-surface-border/70 pt-3 sm:min-w-[7rem] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
+          <div className="mx-auto flex h-full min-h-0 w-fit flex-col justify-between gap-y-1 sm:mx-0">
             <ObjectMetricStatus
               label="Камеры"
               online={hasCameraOnline ? object.camerasOnline! : null}
               total={camerasTotal}
               icon={<CamerasIcon />}
               muted={!serverOnline && !awaitingFirstCameraPreview}
-              onlineUnknown={!linkOnline || (!hasCameraOnline && !awaitingFirstCameraPreview && !camerasFailed)}
+              onlineUnknown={!serverOnline || (!hasCameraOnline && !awaitingFirstCameraPreview && !camerasFailed)}
               loading={awaitingFirstCameraPreview}
               failed={camerasFailed}
+              hoverTooltip={camerasHoverTooltip}
+              onRefresh={onRefreshMetric ? () => onRefreshMetric(object, 'cameras') : undefined}
+              refreshing={camerasPreviewLoading}
             />
             <ObjectMetricStatus
               label="Рупора"
@@ -1297,16 +2075,44 @@ function MonitoringObjectCard({
               icon={<HornsIcon />}
               muted={!serverOnline && !awaitingFirstMegaphoneStatus}
               onlineUnknown={
-                !linkOnline || (!hasMegaphoneOnline && !awaitingFirstMegaphoneStatus && !megaphonesFailed)
+                !serverOnline || (!hasMegaphoneOnline && !awaitingFirstMegaphoneStatus && !megaphonesFailed)
               }
               loading={awaitingFirstMegaphoneStatus}
               failed={megaphonesFailed}
+              hoverTooltip={megaphonesHoverTooltip}
+              onRefresh={onRefreshMetric ? () => onRefreshMetric(object, 'megaphones') : undefined}
+              refreshing={megaphonesStatusLoading}
+            />
+            <ObjectIndicatorStatus
+              entries={sensorsDeviceLabels}
+              status={resolvedSensorsStatus}
+              icon={<SensorsIcon />}
+              now={now}
+              hoverTooltip={sensorsHoverTooltip}
+              onRefresh={onRefreshMetric ? () => onRefreshMetric(object, 'sensors') : undefined}
+              refreshing={sensorsRefreshLoading}
             />
           </div>
         </div>
       </div>
     </Card>
   )
+}
+
+function mockGuardDevice(id: number, type: string, address: string): MonitoringGuardDevice {
+  return {
+    id,
+    type,
+    address,
+    logicalAddress: 0,
+    useRtuOverTcp: false,
+    startRegister: 0,
+    numRegisters: 64,
+    login: '',
+    password: '',
+    wellUid: '',
+    wellBoreUid: ''
+  }
 }
 
 function mockPingResult(
@@ -1335,10 +2141,48 @@ function MonitoringDebugObjectCard({ now }: { now: number }) {
     serverLogin: DEFAULT_SERVER_LOGIN,
     serverPassword: '',
     serverVersion: '2.14.3',
-    camerasTotal: 12,
-    camerasOnline: 11,
-    megaphonesTotal: 4,
-    megaphonesOnline: 4
+    camerasTotal: 3,
+    camerasOnline: 2,
+    camerasOnlineIds: [10, 12],
+    locations: [
+      { id: 100, localizedName: 'Объект Север', parentId: null },
+      { id: 102, localizedName: 'Лебёдка', parentId: 100 },
+      { id: 103, localizedName: 'Кран', parentId: 100 }
+    ],
+    primaryLocationName: 'Объект Север',
+    megaphonesTotal: 2,
+    megaphonesOnline: 1,
+    megaphonesOnlineIds: [11],
+    megaphones: [
+      { id: 11, address: '10.67.64.45', locationIds: [102] },
+      { id: 12, address: '10.67.64.46', locationIds: [103] }
+    ],
+    guardDevices: [
+      mockGuardDevice(0, 'ive50', '192.168.1.10:502'),
+      mockGuardDevice(1, 'del150', '192.168.1.11:502'),
+      mockGuardDevice(2, 'wits', '192.168.1.2:12000'),
+      mockGuardDevice(3, 'witsml', '192.168.1.3:80'),
+      mockGuardDevice(4, 'redis', '192.168.1.4:6379')
+    ],
+    devicesOnline: 3,
+    devicesOnlineIds: [0, 2, 4],
+    cameraStreams: [
+      {
+        id: 10,
+        expectedImageSize: { width: 1920, height: 1080 },
+        stream: { url: 'rtsp://admin:admin@10.67.64.10/live/main', locationId: 102 }
+      },
+      {
+        id: 11,
+        expectedImageSize: { width: 1280, height: 720 },
+        stream: { url: 'rtsp://10.67.64.11:554/stream1', locationId: 103 }
+      },
+      {
+        id: 12,
+        expectedImageSize: { width: 1920, height: 1080 },
+        stream: { url: 'rtsps://user:pass@10.67.64.12/live', locationId: null }
+      }
+    ]
   }
   const linkId = targetId(object.id, 'link')
   const serverId = targetId(object.id, 'server')
@@ -1355,7 +2199,6 @@ function MonitoringDebugObjectCard({ now }: { now: number }) {
       object={object}
       results={results}
       latencyHistory={latencyHistory}
-      linkStatusHistory={{}}
       checkingLink={false}
       checkingServer={false}
       serverVersion={object.serverVersion ?? null}
@@ -1372,16 +2215,21 @@ function MonitoringDebugObjectCard({ now }: { now: number }) {
 }
 
 export function Monitoring() {
-  const [snapshot, setSnapshot] = useState(() => loadMonitoringSnapshot())
+  const [snapshot, setSnapshot] = useState(() => {
+    const loaded = loadMonitoringSnapshot()
+    return { objects: loaded.objects.map(clearCachedMetricCounts) }
+  })
   const [editor, setEditor] = useState<EditorState>(null)
   const [results, setResults] = useState<ResultMap>({})
   const [latencyHistory, setLatencyHistory] = useState<LatencyHistoryMap>({})
   const [linkStatusHistory, setLinkStatusHistory] = useState<LinkStatusHistoryMap>({})
+  const [linkUnstableFlags, setLinkUnstableFlags] = useState<IdFlagMap>({})
   const [serverVersionErrors, setServerVersionErrors] = useState<VersionErrorMap>({})
   const [camerasPreviewLoading, setCamerasPreviewLoading] = useState<IdFlagMap>({})
   const [megaphonesStatusLoading, setMegaphonesStatusLoading] = useState<IdFlagMap>({})
   const [camerasMetricFailed, setCamerasMetricFailed] = useState<IdFlagMap>({})
   const [megaphonesMetricFailed, setMegaphonesMetricFailed] = useState<IdFlagMap>({})
+  const [sensorsRefreshLoading, setSensorsRefreshLoading] = useState<IdFlagMap>({})
   const [linkChecking, setLinkChecking] = useState<IdFlagMap>({})
   const [serverChecking, setServerChecking] = useState<IdFlagMap>({})
   /** Forces card re-render so link-stability window updates even when no probes are due. */
@@ -1390,6 +2238,8 @@ export function Monitoring() {
   const bootstrapInFlightRef = useRef(new Set<string>())
   const previewInFlightRef = useRef(new Set<string>())
   const megaphoneStatusInFlightRef = useRef(new Set<string>())
+  const deviceProbeInFlightRef = useRef(new Set<string>())
+  const metricRefreshInFlightRef = useRef(new Set<string>())
   const scheduleRef = useRef<Record<string, ObjectProbeSchedule>>({})
   const credentialKeyRef = useRef<Record<string, string>>({})
   /** Bumped to ignore late IPC responses after link/server drop. */
@@ -1398,9 +2248,11 @@ export function Monitoring() {
   const snapshotRef = useRef(snapshot)
   const resultsRef = useRef(results)
   const linkStatusHistoryRef = useRef(linkStatusHistory)
+  const linkUnstableFlagsRef = useRef(linkUnstableFlags)
   snapshotRef.current = snapshot
   resultsRef.current = results
   linkStatusHistoryRef.current = linkStatusHistory
+  linkUnstableFlagsRef.current = linkUnstableFlags
 
   useEffect(() => {
     mountedRef.current = true
@@ -1426,6 +2278,7 @@ export function Monitoring() {
     probeEpochRef.current[objectId] = (probeEpochRef.current[objectId] ?? 0) + 1
     previewInFlightRef.current.delete(objectId)
     megaphoneStatusInFlightRef.current.delete(objectId)
+    deviceProbeInFlightRef.current.delete(objectId)
     bootstrapInFlightRef.current.delete(objectId)
     setCamerasPreviewLoading((prev) => clearIdFlag(prev, objectId))
     setMegaphonesStatusLoading((prev) => clearIdFlag(prev, objectId))
@@ -1434,6 +2287,11 @@ export function Monitoring() {
   const editingObject = useMemo(
     () => (editor?.mode === 'edit' && editor.objectId ? snapshot.objects.find((object) => object.id === editor.objectId) ?? null : null),
     [editor, snapshot.objects]
+  )
+
+  const sortedObjects = useMemo(
+    () => [...snapshot.objects].sort(compareMonitoringObjectsByDigits),
+    [snapshot.objects]
   )
 
   useEffect(() => {
@@ -1454,11 +2312,15 @@ export function Monitoring() {
   const runBootstrap = useCallback(async (object: MonitoringObject, forceStreams = false): Promise<void> => {
     const fetchVersion = window.api?.monitoringFetchVersion
     const fetchStreams = window.api?.monitoringFetchStreams
+    const fetchLocations = window.api?.monitoringFetchLocations
     const fetchMegaphones = window.api?.monitoringFetchMegaphones
+    const fetchDevices = window.api?.monitoringFetchDevices
     if (
       typeof fetchVersion !== 'function' ||
       typeof fetchStreams !== 'function' ||
-      typeof fetchMegaphones !== 'function'
+      typeof fetchLocations !== 'function' ||
+      typeof fetchMegaphones !== 'function' ||
+      typeof fetchDevices !== 'function'
     ) {
       setServerVersionErrors((prev) => ({
         ...prev,
@@ -1487,20 +2349,47 @@ export function Monitoring() {
       password: object.serverPassword
     }
 
+    const markCredentialFailure = (error: string | undefined): void => {
+      setServerVersionErrors((prev) => ({
+        ...prev,
+        [object.id]: localizeMonitoringError(error)
+      }))
+      setSnapshot((prev) => ({
+        objects: prev.objects.map((item) => {
+          if (item.id !== object.id || !item.serverVersion) return item
+          const nextItem = { ...item }
+          delete nextItem.serverVersion
+          return nextItem
+        })
+      }))
+    }
+
     try {
       console.log('[monitoring] bootstrap start', object.id, object.serverHost)
       const now = Date.now()
       let streamsOk = Boolean(object.cameraStreams?.length)
-      let megaphonesOk = object.megaphonesTotal !== undefined
+      let locationsOk = Boolean(object.locations?.length)
+      let megaphonesOk = Boolean(object.megaphones?.length) || object.megaphonesTotal !== undefined
+      let devicesOk = object.guardDevices !== undefined
+      let versionOk = Boolean(object.serverVersion)
 
       // Warm-start from cache so metrics can run while lists refresh.
       if (streamsOk) {
         schedule.streamsReady = true
         if (schedule.nextPreviewAt === 0) schedule.nextPreviewAt = now
       }
+      if (locationsOk) {
+        schedule.locationsReady = true
+      }
       if (megaphonesOk) {
         schedule.megaphonesReady = true
         if (schedule.nextMegaphoneStatusAt === 0) schedule.nextMegaphoneStatusAt = now
+      }
+      if (devicesOk) {
+        schedule.devicesReady = true
+        if (schedule.nextDeviceProbeAt === 0 && (object.guardDevices?.length ?? 0) > 0) {
+          schedule.nextDeviceProbeAt = now
+        }
       }
 
       const needVersion = !object.serverVersion
@@ -1509,22 +2398,39 @@ export function Monitoring() {
         !object.cameraStreams?.length ||
         schedule.lastStreamsAt === 0 ||
         now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS
+      const needLocations =
+        forceStreams ||
+        !object.locations?.length ||
+        schedule.lastLocationsAt === 0 ||
+        now - schedule.lastLocationsAt >= MONITORING_STREAMS_REFRESH_MS
       const needMegaphones =
         forceStreams ||
+        !object.megaphones?.length ||
         object.megaphonesTotal === undefined ||
         schedule.lastMegaphonesAt === 0 ||
         now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS
+      const needDevices =
+        forceStreams ||
+        object.guardDevices === undefined ||
+        schedule.lastDevicesAt === 0 ||
+        now - schedule.lastDevicesAt >= MONITORING_STREAMS_REFRESH_MS
 
       if (needVersion) {
         const versionResult = await fetchVersion(auth)
         if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
 
         if (!versionResult.ok || !versionResult.version) {
-          setServerVersionErrors((prev) => ({
-            ...prev,
-            [object.id]: localizeMonitoringError(versionResult.error)
-          }))
+          versionOk = false
+          if (isCredentialAuthError(versionResult.error)) {
+            markCredentialFailure(versionResult.error)
+          } else {
+            setServerVersionErrors((prev) => ({
+              ...prev,
+              [object.id]: localizeMonitoringError(versionResult.error)
+            }))
+          }
         } else {
+          versionOk = true
           setServerVersionErrors((prev) => {
             if (!(object.id in prev)) return prev
             const next = { ...prev }
@@ -1545,7 +2451,12 @@ export function Monitoring() {
 
         if (!streamsResult.ok) {
           console.warn('[monitoring] streams failed', object.id, streamsResult.error)
-          if (object.cameraStreams?.length) {
+          if (isCredentialAuthError(streamsResult.error)) {
+            markCredentialFailure(streamsResult.error)
+            versionOk = false
+            streamsOk = false
+            schedule.streamsReady = false
+          } else if (object.cameraStreams?.length) {
             streamsOk = true
             schedule.streamsReady = true
             if (schedule.lastStreamsAt === 0) schedule.lastStreamsAt = now
@@ -1585,6 +2496,7 @@ export function Monitoring() {
                 retryVersion.ok &&
                 retryVersion.version
               ) {
+                versionOk = true
                 setSnapshot((prev) => ({
                   objects: prev.objects.map((item) =>
                     item.id === object.id ? { ...item, serverVersion: retryVersion.version! } : item
@@ -1596,13 +2508,58 @@ export function Monitoring() {
         }
       }
 
+      // After version is known (cached, fresh, or retry), load location names for camera tooltips.
+      if (versionOk && needLocations) {
+        const locationsResult = await fetchLocations(auth)
+        if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
+
+        if (!locationsResult.ok) {
+          console.warn('[monitoring] locations failed', object.id, locationsResult.error)
+          if (isCredentialAuthError(locationsResult.error)) {
+            markCredentialFailure(locationsResult.error)
+            versionOk = false
+            locationsOk = false
+            schedule.locationsReady = false
+          } else if (object.locations?.length) {
+            locationsOk = true
+            schedule.locationsReady = true
+            if (schedule.lastLocationsAt === 0) schedule.lastLocationsAt = now
+          } else {
+            locationsOk = false
+            schedule.locationsReady = false
+          }
+        } else {
+          locationsOk = true
+          schedule.lastLocationsAt = now
+          schedule.locationsReady = true
+          const primaryLocationName = resolvePrimaryLocationName(locationsResult.locations)
+          setSnapshot((prev) => ({
+            objects: prev.objects.map((item) => {
+              if (item.id !== object.id) return item
+              const next: MonitoringObject = {
+                ...item,
+                locations: locationsResult.locations
+              }
+              if (primaryLocationName) next.primaryLocationName = primaryLocationName
+              else delete next.primaryLocationName
+              return next
+            })
+          }))
+        }
+      }
+
       if (needMegaphones) {
         const megaphonesResult = await fetchMegaphones(auth)
         if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
 
         if (!megaphonesResult.ok) {
           console.warn('[monitoring] megaphones failed', object.id, megaphonesResult.error)
-          if (object.megaphonesTotal !== undefined) {
+          if (isCredentialAuthError(megaphonesResult.error)) {
+            markCredentialFailure(megaphonesResult.error)
+            versionOk = false
+            megaphonesOk = false
+            schedule.megaphonesReady = false
+          } else if (object.megaphones?.length || object.megaphonesTotal !== undefined) {
             megaphonesOk = true
             schedule.megaphonesReady = true
             if (schedule.lastMegaphonesAt === 0) schedule.lastMegaphonesAt = now
@@ -1619,12 +2576,55 @@ export function Monitoring() {
               item.id === object.id
                 ? {
                     ...item,
-                    megaphonesTotal: megaphonesResult.count,
-                    ...(megaphonesResult.count === 0 ? { megaphonesOnline: 0 } : {})
+                    megaphones: megaphonesResult.megaphones,
+                    megaphonesTotal: megaphonesResult.megaphones.length,
+                    ...(megaphonesResult.megaphones.length === 0 ? { megaphonesOnline: 0, megaphonesOnlineIds: [] } : {})
                   }
                 : item
             )
           }))
+        }
+      }
+
+      if (needDevices) {
+        const devicesResult = await fetchDevices(auth)
+        if (!mountedRef.current || (probeEpochRef.current[object.id] ?? 0) !== epoch) return
+
+        if (!devicesResult.ok) {
+          console.warn('[monitoring] devices failed', object.id, devicesResult.error)
+          if (isCredentialAuthError(devicesResult.error)) {
+            markCredentialFailure(devicesResult.error)
+            versionOk = false
+            devicesOk = false
+            schedule.devicesReady = false
+          } else if (object.guardDevices !== undefined) {
+            devicesOk = true
+            schedule.devicesReady = true
+            if (schedule.lastDevicesAt === 0) schedule.lastDevicesAt = now
+          } else {
+            devicesOk = false
+            schedule.devicesReady = false
+          }
+        } else {
+          devicesOk = true
+          schedule.lastDevicesAt = now
+          schedule.devicesReady = true
+          setSnapshot((prev) => ({
+            objects: prev.objects.map((item) =>
+              item.id === object.id
+                ? {
+                    ...item,
+                    guardDevices: devicesResult.devices,
+                    ...(devicesResult.devices.length === 0
+                      ? { devicesOnline: 0, devicesOnlineIds: [] }
+                      : {})
+                  }
+                : item
+            )
+          }))
+          if (devicesResult.devices.length > 0 && schedule.nextDeviceProbeAt === 0) {
+            schedule.nextDeviceProbeAt = now
+          }
         }
       }
 
@@ -1633,14 +2633,167 @@ export function Monitoring() {
         schedule.streamsReady = true
         if (schedule.nextPreviewAt === 0) schedule.nextPreviewAt = now
       }
+      if (locationsOk) {
+        schedule.locationsReady = true
+      }
       if (megaphonesOk) {
         schedule.megaphonesReady = true
         if (schedule.nextMegaphoneStatusAt === 0) schedule.nextMegaphoneStatusAt = now
+      }
+      if (devicesOk) {
+        schedule.devicesReady = true
+        if (schedule.nextDeviceProbeAt === 0) {
+          const latest = snapshotRef.current.objects.find((item) => item.id === object.id)
+          if ((latest?.guardDevices?.length ?? object.guardDevices?.length ?? 0) > 0) {
+            schedule.nextDeviceProbeAt = now
+          }
+        }
       }
     } finally {
       bootstrapInFlightRef.current.delete(object.id)
     }
   }, [getSchedule])
+
+  const refreshMetricBlock = useCallback(
+    async (object: MonitoringObject, kind: MonitoringMetricKind): Promise<void> => {
+      const api = window.api
+      if (!api || !object.serverPassword) return
+      if (!isOnline(resultsRef.current[targetId(object.id, 'server')])) return
+
+      const refreshKey = `${object.id}:${kind}`
+      if (metricRefreshInFlightRef.current.has(refreshKey)) return
+      metricRefreshInFlightRef.current.add(refreshKey)
+
+      const auth = {
+        id: object.id,
+        host: object.serverHost,
+        username: object.serverLogin,
+        password: object.serverPassword
+      }
+      const schedule = getSchedule(object.id)
+
+      if (kind === 'cameras') {
+        setCamerasMetricFailed((prev) => clearIdFlag(prev, object.id))
+        setCamerasPreviewLoading((prev) => ({ ...prev, [object.id]: true }))
+      } else if (kind === 'megaphones') {
+        setMegaphonesMetricFailed((prev) => clearIdFlag(prev, object.id))
+        setMegaphonesStatusLoading((prev) => ({ ...prev, [object.id]: true }))
+      } else {
+        setSensorsRefreshLoading((prev) => ({ ...prev, [object.id]: true }))
+      }
+
+      try {
+        if (kind === 'cameras') {
+          const streamsResult = await api.monitoringFetchStreams(auth)
+          if (!streamsResult.ok) throw new Error(streamsResult.error || 'Не удалось обновить список камер')
+
+          const streamIds = streamsResult.streams.map((stream) => stream.id)
+          const previewResult =
+            streamIds.length > 0
+              ? await api.monitoringPreviewCameras({ ...auth, streamIds })
+              : { ok: true as const, onlineCount: 0, onlineIds: [] as number[] }
+          if (!previewResult.ok) throw new Error(previewResult.error || 'Не удалось обновить статусы камер')
+
+          schedule.streamsReady = true
+          schedule.lastStreamsAt = Date.now()
+          schedule.previewFailures = 0
+          schedule.nextPreviewAt =
+            Date.now() + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
+          setSnapshot((prev) => ({
+            objects: prev.objects.map((item) =>
+              item.id === object.id
+                ? {
+                    ...item,
+                    cameraStreams: streamsResult.streams,
+                    camerasTotal: streamsResult.streams.length,
+                    camerasOnline: previewResult.onlineCount,
+                    camerasOnlineIds: previewResult.onlineIds ?? []
+                  }
+                : item
+            )
+          }))
+          return
+        }
+
+        if (kind === 'megaphones') {
+          const megaphonesResult = await api.monitoringFetchMegaphones(auth)
+          if (!megaphonesResult.ok) {
+            throw new Error(megaphonesResult.error || 'Не удалось обновить список рупоров')
+          }
+
+          const statusesResult =
+            megaphonesResult.megaphones.length > 0
+              ? await api.monitoringFetchMegaphoneStatuses(auth)
+              : { ok: true as const, onlineCount: 0, onlineIds: [] as number[] }
+          if (!statusesResult.ok) throw new Error(statusesResult.error || 'Не удалось обновить статусы рупоров')
+
+          schedule.megaphonesReady = true
+          schedule.lastMegaphonesAt = Date.now()
+          schedule.megaphoneStatusFailures = 0
+          schedule.nextMegaphoneStatusAt =
+            Date.now() + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
+          setSnapshot((prev) => ({
+            objects: prev.objects.map((item) =>
+              item.id === object.id
+                ? {
+                    ...item,
+                    megaphones: megaphonesResult.megaphones,
+                    megaphonesTotal: megaphonesResult.megaphones.length,
+                    megaphonesOnline: statusesResult.onlineCount,
+                    megaphonesOnlineIds: statusesResult.onlineIds ?? []
+                  }
+                : item
+            )
+          }))
+          return
+        }
+
+        const devicesResult = await api.monitoringFetchDevices(auth)
+        if (!devicesResult.ok) throw new Error(devicesResult.error || 'Не удалось обновить список датчиков')
+
+        const probeResult =
+          devicesResult.devices.length > 0
+            ? await api.monitoringProbeDevices({ ...auth, devices: devicesResult.devices })
+            : { ok: true as const, onlineCount: 0, onlineIds: [] as number[] }
+        if (!probeResult.ok) throw new Error(probeResult.error || 'Не удалось обновить статусы датчиков')
+
+        schedule.devicesReady = true
+        schedule.lastDevicesAt = Date.now()
+        schedule.deviceProbeFailures = 0
+        schedule.nextDeviceProbeAt =
+          Date.now() + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
+        setSnapshot((prev) => ({
+          objects: prev.objects.map((item) =>
+            item.id === object.id
+              ? {
+                  ...item,
+                  guardDevices: devicesResult.devices,
+                  devicesOnline: probeResult.onlineCount,
+                  devicesOnlineIds: probeResult.onlineIds ?? []
+                }
+              : item
+          )
+        }))
+      } catch (error) {
+        console.warn(`[monitoring] manual ${kind} refresh failed`, object.id, error)
+        if (kind === 'cameras') {
+          setCamerasMetricFailed((prev) => ({ ...prev, [object.id]: true }))
+        } else if (kind === 'megaphones') {
+          setMegaphonesMetricFailed((prev) => ({ ...prev, [object.id]: true }))
+        }
+      } finally {
+        metricRefreshInFlightRef.current.delete(refreshKey)
+        if (kind === 'cameras') {
+          setCamerasPreviewLoading((prev) => clearIdFlag(prev, object.id))
+        } else if (kind === 'megaphones') {
+          setMegaphonesStatusLoading((prev) => clearIdFlag(prev, object.id))
+        } else {
+          setSensorsRefreshLoading((prev) => clearIdFlag(prev, object.id))
+        }
+      }
+    },
+    [getSchedule]
+  )
 
   const refresh = useCallback(async () => {
     if (!snapshotRef.current.objects.length || refreshingRef.current) return
@@ -1649,6 +2802,7 @@ export function Monitoring() {
 
     try {
       if (!window.api) return
+      const api = window.api
       const now = Date.now()
       const objects = snapshotRef.current.objects
 
@@ -1676,6 +2830,140 @@ export function Monitoring() {
         .slice(0, linkLimit)
 
       const mergedResults: ResultMap = { ...resultsRef.current }
+      const serverProbePromises = new Map<string, Promise<MonitoringPingResult>>()
+
+      const applyServerResult = (object: MonitoringObject, result: MonitoringPingResult): void => {
+        mergedResults[result.id] = result
+        setResults((prev) => ({ ...prev, [result.id]: result }))
+
+        const schedule = getSchedule(object.id)
+        const credKey = versionFetchKey(object)
+        if (credentialKeyRef.current[object.id] !== credKey) {
+          credentialKeyRef.current[object.id] = credKey
+          schedule.streamsReady = false
+          schedule.locationsReady = false
+          schedule.megaphonesReady = false
+          schedule.devicesReady = false
+          schedule.lastStreamsAt = 0
+          schedule.lastLocationsAt = 0
+          schedule.lastMegaphonesAt = 0
+          schedule.lastDevicesAt = 0
+          schedule.nextPreviewAt = 0
+          schedule.nextMegaphoneStatusAt = 0
+          schedule.nextDeviceProbeAt = 0
+          bumpProbeEpoch(object.id)
+        }
+
+        if (result.status !== 'online') {
+          schedule.serverFailures += 1
+          schedule.lastHttpOk = false
+          schedule.nextServerAt =
+            Date.now() + failureBackoffMs(schedule.serverFailures, MONITORING_SERVER_INTERVAL_MS)
+          bumpProbeEpoch(object.id)
+          return
+        }
+
+        schedule.serverFailures = 0
+        schedule.lastHttpOk = true
+        schedule.nextServerAt =
+          Date.now() + successDelayMs(adaptiveIntervalMs('server', schedule.signalTier))
+
+        const latestObject = snapshotRef.current.objects.find((item) => item.id === object.id) ?? object
+        const streamsStale =
+          schedule.lastStreamsAt > 0 && now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS
+        const locationsStale =
+          schedule.lastLocationsAt > 0 && now - schedule.lastLocationsAt >= MONITORING_STREAMS_REFRESH_MS
+        const megaphonesStale =
+          schedule.lastMegaphonesAt > 0 && now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS
+        const devicesStale =
+          schedule.lastDevicesAt > 0 && now - schedule.lastDevicesAt >= MONITORING_STREAMS_REFRESH_MS
+        const needBootstrap =
+          !schedule.streamsReady ||
+          !schedule.locationsReady ||
+          !schedule.megaphonesReady ||
+          !schedule.devicesReady ||
+          schedule.lastStreamsAt === 0 ||
+          schedule.lastLocationsAt === 0 ||
+          schedule.lastMegaphonesAt === 0 ||
+          schedule.lastDevicesAt === 0 ||
+          streamsStale ||
+          locationsStale ||
+          megaphonesStale ||
+          devicesStale ||
+          !latestObject.serverVersion ||
+          latestObject.megaphonesTotal === undefined ||
+          latestObject.guardDevices === undefined
+        if (needBootstrap) {
+          void runBootstrap(
+            latestObject,
+            streamsStale || locationsStale || megaphonesStale || devicesStale
+          )
+        }
+      }
+
+      const startServerProbe = (object: MonitoringObject): Promise<MonitoringPingResult> => {
+        const existing = serverProbePromises.get(object.id)
+        if (existing) return existing
+
+        const schedule = getSchedule(object.id)
+        schedule.nextServerAt = Number.MAX_SAFE_INTEGER
+        setServerChecking((prev) => (prev[object.id] ? prev : { ...prev, [object.id]: true }))
+        const target: MonitoringPingTarget = {
+          id: targetId(object.id, 'server'),
+          label: `${object.code} сервер`,
+          host: object.serverHost,
+          fast: !resultsRef.current[targetId(object.id, 'server')]
+        }
+
+        const promise = api
+          .monitoringPing([target])
+          .then(async ([pingResult]) => {
+            if (pingResult.status !== 'online') {
+              return {
+                ...pingResult,
+                status: 'offline' as const,
+                latencyMs: null,
+                checkedAt: Date.now()
+              }
+            }
+
+            const httpProbe = api.monitoringHttpProbe
+            if (typeof httpProbe !== 'function') return pingResult
+            const [httpResult] = await httpProbe([
+              {
+                id: target.id,
+                host: object.serverHost,
+                label: target.label
+              }
+            ])
+            const httpOk = httpResult?.ok === true
+            return {
+              ...pingResult,
+              status: (httpOk ? 'online' : 'error') as MonitoringPingStatus,
+              checkedAt: Date.now(),
+              error: httpOk ? undefined : OWL_GUARD_UNREACHABLE
+            }
+          })
+          .catch((error: unknown) => ({
+            id: target.id,
+            host: target.host,
+            label: target.label,
+            status: 'error' as const,
+            latencyMs: null,
+            checkedAt: Date.now(),
+            error: error instanceof Error ? error.message : 'Не удалось проверить сервер'
+          }))
+          .then((result) => {
+            applyServerResult(object, result)
+            return result
+          })
+          .finally(() => {
+            setServerChecking((prev) => clearIdFlag(prev, object.id))
+          })
+
+        serverProbePromises.set(object.id, promise)
+        return promise
+      }
 
       if (dueLinks.length) {
         const linkIds = dueLinks.map((object) => object.id)
@@ -1685,10 +2973,27 @@ export function Monitoring() {
           const linkTargets: MonitoringPingTarget[] = dueLinks.map((object) => ({
             id: targetId(object.id, 'link'),
             label: `${object.code} связь`,
-            host: object.linkHost
+            host: object.linkHost,
+            fast: !resultsRef.current[targetId(object.id, 'link')]
           }))
 
-          const linkResults = await window.api.monitoringPing(linkTargets)
+          const linkResults = await Promise.all(
+            linkTargets.map(async (target, index) => {
+              try {
+                const [result] = await api.monitoringPing([target])
+                setResults((prev) => ({ ...prev, [result.id]: result }))
+                const object = dueLinks[index]
+                const schedule = getSchedule(object.id)
+                if (result.status === 'online' && schedule.nextServerAt <= now) {
+                  void startServerProbe(object)
+                }
+                return result
+              } finally {
+                const objectId = dueLinks[index].id
+                setLinkChecking((prev) => clearIdFlag(prev, objectId))
+              }
+            })
+          )
           const offlineServers: MonitoringPingResult[] = []
 
           linkResults.forEach((result) => {
@@ -1702,18 +3007,30 @@ export function Monitoring() {
               result.status === 'online',
               checkedAt
             )
+            const unstable = resolveLinkUnstable(
+              Boolean(linkUnstableFlagsRef.current[result.id]),
+              statusHistory,
+              checkedAt
+            )
+            linkUnstableFlagsRef.current = {
+              ...linkUnstableFlagsRef.current,
+              [result.id]: unstable
+            }
             updateSignalTier(schedule, {
               online: result.status === 'online',
               latencyMs: result.latencyMs,
               replyCount: result.replyCount,
               sentCount: result.sentCount,
-              unstable: isLinkUnstable(statusHistory, checkedAt)
+              unstable
             })
             if (result.status === 'online') {
               schedule.linkFailures = 0
               schedule.nextLinkAt =
                 checkedAt + successDelayMs(adaptiveIntervalMs('link', schedule.signalTier))
-              if (schedule.nextServerAt === 0 || schedule.nextServerAt > now + MONITORING_SERVER_INTERVAL_MS) {
+              if (
+                !serverProbePromises.has(objectId) &&
+                (schedule.nextServerAt === 0 || schedule.nextServerAt > now + MONITORING_SERVER_INTERVAL_MS)
+              ) {
                 schedule.nextServerAt = now
               }
             } else {
@@ -1763,6 +3080,27 @@ export function Monitoring() {
                 result.status === 'online',
                 result.checkedAt || now
               )
+            })
+            return next
+          })
+          setLinkUnstableFlags((prev) => {
+            let next = prev
+            linkResults.forEach((result) => {
+              if (result.status !== 'online' && result.status !== 'offline' && result.status !== 'error') return
+              const history = appendLinkStatusSample(
+                linkStatusHistoryRef.current[result.id],
+                result.status === 'online',
+                result.checkedAt || now
+              )
+              const unstable = resolveLinkUnstable(
+                Boolean(prev[result.id]),
+                history,
+                result.checkedAt || now
+              )
+              if (Boolean(prev[result.id]) === unstable) return
+              if (next === prev) next = { ...prev }
+              if (unstable) next[result.id] = true
+              else delete next[result.id]
             })
             return next
           })
@@ -1873,11 +3211,16 @@ export function Monitoring() {
             if (credentialKeyRef.current[object.id] !== credKey) {
               credentialKeyRef.current[object.id] = credKey
               schedule.streamsReady = false
+              schedule.locationsReady = false
               schedule.megaphonesReady = false
+              schedule.devicesReady = false
               schedule.lastStreamsAt = 0
+              schedule.lastLocationsAt = 0
               schedule.lastMegaphonesAt = 0
+              schedule.lastDevicesAt = 0
               schedule.nextPreviewAt = 0
               schedule.nextMegaphoneStatusAt = 0
+              schedule.nextDeviceProbeAt = 0
               bumpProbeEpoch(object.id)
             }
 
@@ -1907,19 +3250,33 @@ export function Monitoring() {
             if (result.status === 'online') {
               const streamsStale =
                 schedule.lastStreamsAt > 0 && now - schedule.lastStreamsAt >= MONITORING_STREAMS_REFRESH_MS
+              const locationsStale =
+                schedule.lastLocationsAt > 0 && now - schedule.lastLocationsAt >= MONITORING_STREAMS_REFRESH_MS
               const megaphonesStale =
                 schedule.lastMegaphonesAt > 0 && now - schedule.lastMegaphonesAt >= MONITORING_STREAMS_REFRESH_MS
+              const devicesStale =
+                schedule.lastDevicesAt > 0 && now - schedule.lastDevicesAt >= MONITORING_STREAMS_REFRESH_MS
               const needBootstrap =
                 !schedule.streamsReady ||
+                !schedule.locationsReady ||
                 !schedule.megaphonesReady ||
+                !schedule.devicesReady ||
                 schedule.lastStreamsAt === 0 ||
+                schedule.lastLocationsAt === 0 ||
                 schedule.lastMegaphonesAt === 0 ||
+                schedule.lastDevicesAt === 0 ||
                 streamsStale ||
+                locationsStale ||
                 megaphonesStale ||
+                devicesStale ||
                 !object.serverVersion ||
-                object.megaphonesTotal === undefined
+                object.megaphonesTotal === undefined ||
+                object.guardDevices === undefined
               if (needBootstrap) {
-                void runBootstrap(object, streamsStale || megaphonesStale)
+                void runBootstrap(
+                  object,
+                  streamsStale || locationsStale || megaphonesStale || devicesStale
+                )
               }
             }
           }
@@ -2036,10 +3393,18 @@ export function Monitoring() {
             setSnapshot((prev) => {
               const current = prev.objects.find((item) => item.id === object.id)
               if (!current) return prev
-              if (current.camerasOnline === result.onlineCount) return prev
+              const onlineIds = result.onlineIds ?? []
+              if (
+                current.camerasOnline === result.onlineCount &&
+                sameNumberList(current.camerasOnlineIds, onlineIds)
+              ) {
+                return prev
+              }
               return {
                 objects: prev.objects.map((item) =>
-                  item.id === object.id ? { ...item, camerasOnline: result.onlineCount } : item
+                  item.id === object.id
+                    ? { ...item, camerasOnline: result.onlineCount, camerasOnlineIds: onlineIds }
+                    : item
                 )
               }
             })
@@ -2079,7 +3444,7 @@ export function Monitoring() {
           if (!object.serverPassword) return false
           if (!isOnline(resultsRef.current[targetId(object.id, 'link')])) return false
           if (!isOnline(resultsRef.current[targetId(object.id, 'server')])) return false
-          if ((object.megaphonesTotal ?? 0) <= 0) return false
+          if ((object.megaphonesTotal ?? object.megaphones?.length ?? 0) <= 0) return false
           const schedule = getSchedule(object.id)
           if (!schedule.megaphonesReady) return false
           return schedule.nextMegaphoneStatusAt <= now
@@ -2133,10 +3498,23 @@ export function Monitoring() {
             setMegaphonesMetricFailed((prev) => clearIdFlag(prev, object.id))
             setSnapshot((prev) => {
               const current = prev.objects.find((item) => item.id === object.id)
-              if (!current || current.megaphonesOnline === result.count) return prev
+              if (!current) return prev
+              const onlineIds = result.onlineIds ?? []
+              if (
+                current.megaphonesOnline === result.onlineCount &&
+                sameNumberList(current.megaphonesOnlineIds, onlineIds)
+              ) {
+                return prev
+              }
               return {
                 objects: prev.objects.map((item) =>
-                  item.id === object.id ? { ...item, megaphonesOnline: result.count } : item
+                  item.id === object.id
+                    ? {
+                        ...item,
+                        megaphonesOnline: result.onlineCount,
+                        megaphonesOnlineIds: onlineIds
+                      }
+                    : item
                 )
               }
             })
@@ -2153,6 +3531,107 @@ export function Monitoring() {
     }
 
     runMegaphoneStatusTick()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [getSchedule, objectsKey])
+
+  useEffect(() => {
+    const probeDevices = window.api?.monitoringProbeDevices
+    if (typeof probeDevices !== 'function') return
+
+    let cancelled = false
+    let timer: number | undefined
+
+    const runDeviceProbeTick = (): void => {
+      if (cancelled) return
+      const now = Date.now()
+      const catchUp = needsMetricsCatchUp(snapshotRef.current.objects, resultsRef.current)
+      const due = snapshotRef.current.objects
+        .filter((object) => {
+          if (deviceProbeInFlightRef.current.has(object.id)) return false
+          if (!object.serverPassword) return false
+          if (!isOnline(resultsRef.current[targetId(object.id, 'link')])) return false
+          if (!isOnline(resultsRef.current[targetId(object.id, 'server')])) return false
+          if ((object.guardDevices?.length ?? 0) <= 0) return false
+          const schedule = getSchedule(object.id)
+          if (!schedule.devicesReady) return false
+          return schedule.nextDeviceProbeAt <= now
+        })
+        .sort((a, b) => {
+          const aFirst = a.devicesOnline === undefined ? 0 : 1
+          const bFirst = b.devicesOnline === undefined ? 0 : 1
+          if (aFirst !== bFirst) return aFirst - bFirst
+          return getSchedule(a.id).nextDeviceProbeAt - getSchedule(b.id).nextDeviceProbeAt
+        })
+        .slice(0, previewBatchLimit(catchUp))
+
+      due.forEach((object) => {
+        const devices = object.guardDevices ?? []
+        const schedule = getSchedule(object.id)
+        const epoch = probeEpochRef.current[object.id] ?? 0
+        deviceProbeInFlightRef.current.add(object.id)
+        schedule.nextDeviceProbeAt =
+          now + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
+
+        console.log('[monitoring] probe devices', object.id, devices.length)
+        void probeDevices({
+          id: object.id,
+          host: object.serverHost,
+          username: object.serverLogin,
+          password: object.serverPassword,
+          devices
+        })
+          .then((result) => {
+            if (!mountedRef.current) return
+            if ((probeEpochRef.current[object.id] ?? 0) !== epoch) return
+            console.log('[monitoring] device probe result', result)
+            if (!result.ok) {
+              schedule.deviceProbeFailures += 1
+              schedule.nextDeviceProbeAt =
+                Date.now() + failureBackoffMs(schedule.deviceProbeFailures, MONITORING_PREVIEW_INTERVAL_MS)
+              console.warn('[monitoring] device probe failed', object.id, result.error)
+              return
+            }
+
+            schedule.deviceProbeFailures = 0
+            schedule.nextDeviceProbeAt =
+              Date.now() + successDelayMs(adaptiveIntervalMs('metrics', schedule.signalTier))
+            setSnapshot((prev) => {
+              const current = prev.objects.find((item) => item.id === object.id)
+              if (!current) return prev
+              const onlineIds = result.onlineIds ?? []
+              if (
+                current.devicesOnline === result.onlineCount &&
+                sameNumberList(current.devicesOnlineIds, onlineIds)
+              ) {
+                return prev
+              }
+              return {
+                objects: prev.objects.map((item) =>
+                  item.id === object.id
+                    ? {
+                        ...item,
+                        devicesOnline: result.onlineCount,
+                        devicesOnlineIds: onlineIds
+                      }
+                    : item
+                )
+              }
+            })
+          })
+          .finally(() => {
+            if ((probeEpochRef.current[object.id] ?? 0) !== epoch) return
+            deviceProbeInFlightRef.current.delete(object.id)
+          })
+      })
+
+      if (cancelled) return
+      timer = window.setTimeout(runDeviceProbeTick, schedulerTickMs(catchUp || due.length > 0))
+    }
+
+    runDeviceProbeTick()
     return () => {
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
@@ -2186,6 +3665,7 @@ export function Monitoring() {
       })
       setCamerasMetricFailed((prev) => clearIdFlag(prev, id))
       setMegaphonesMetricFailed((prev) => clearIdFlag(prev, id))
+      setSensorsRefreshLoading((prev) => clearIdFlag(prev, id))
       setLinkChecking((prev) => clearIdFlag(prev, id))
       setServerChecking((prev) => clearIdFlag(prev, id))
       delete scheduleRef.current[id]
@@ -2203,25 +3683,53 @@ export function Monitoring() {
       if (originalId) {
         nextObjects = prev.objects.map((object) => {
           if (object.id !== originalId) return object
-          const sameHost = object.serverHost === next.serverHost
+          // Keep cached OWL.Guard data only when host + login + password are unchanged.
+          // Otherwise a wrong password would keep the old version and leave the server status green.
+          const sameCredentials =
+            object.serverHost === next.serverHost &&
+            object.serverLogin === next.serverLogin &&
+            object.serverPassword === next.serverPassword
           return {
             ...next,
             id: originalId,
             code: object.code,
-            ...(sameHost && object.serverVersion ? { serverVersion: object.serverVersion } : {}),
-            ...(sameHost && object.cameraStreams
+            ...(sameCredentials && object.serverVersion ? { serverVersion: object.serverVersion } : {}),
+            ...(sameCredentials && object.primaryLocationName
+              ? { primaryLocationName: object.primaryLocationName }
+              : {}),
+            ...(sameCredentials && object.cameraStreams
               ? {
                   cameraStreams: object.cameraStreams,
                   camerasTotal: object.camerasTotal ?? object.cameraStreams.length,
-                  ...(object.camerasOnline !== undefined ? { camerasOnline: object.camerasOnline } : {})
+                  ...(object.camerasOnline !== undefined ? { camerasOnline: object.camerasOnline } : {}),
+                  ...(object.camerasOnlineIds !== undefined
+                    ? { camerasOnlineIds: object.camerasOnlineIds }
+                    : {})
                 }
               : {}),
-            ...(sameHost && object.megaphonesTotal !== undefined
+            ...(sameCredentials && object.locations?.length ? { locations: object.locations } : {}),
+            ...(sameCredentials && object.megaphones?.length
               ? {
-                  megaphonesTotal: object.megaphonesTotal,
-                  ...(object.megaphonesOnline !== undefined ? { megaphonesOnline: object.megaphonesOnline } : {})
+                  megaphones: object.megaphones,
+                  megaphonesTotal: object.megaphonesTotal ?? object.megaphones.length,
+                  ...(object.megaphonesOnline !== undefined
+                    ? { megaphonesOnline: object.megaphonesOnline }
+                    : {}),
+                  ...(object.megaphonesOnlineIds !== undefined
+                    ? { megaphonesOnlineIds: object.megaphonesOnlineIds }
+                    : {})
                 }
-              : {})
+              : sameCredentials && object.megaphonesTotal !== undefined
+                ? {
+                    megaphonesTotal: object.megaphonesTotal,
+                    ...(object.megaphonesOnline !== undefined
+                      ? { megaphonesOnline: object.megaphonesOnline }
+                      : {}),
+                    ...(object.megaphonesOnlineIds !== undefined
+                      ? { megaphonesOnlineIds: object.megaphonesOnlineIds }
+                      : {})
+                  }
+                : {}),
           }
         })
       } else if (prev.objects.some((object) => object.id === next.id)) {
@@ -2230,7 +3738,7 @@ export function Monitoring() {
         nextObjects = [...prev.objects, next]
       }
 
-      setSnapshot({ objects: nextObjects })
+      setSnapshot({ objects: [...nextObjects].sort(compareMonitoringObjectsByDigits) })
 
       clearObjectResults(originalId ?? next.id)
 
@@ -2289,30 +3797,31 @@ export function Monitoring() {
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <MonitoringDebugObjectCard now={uiClock} />
-        {snapshot.objects.map((object) => (
+        {sortedObjects.map((object) => (
           <MonitoringObjectCard
             key={object.id}
             object={object}
             results={results}
             latencyHistory={latencyHistory}
-            linkStatusHistory={linkStatusHistory}
+            linkUnstable={Boolean(linkUnstableFlags[targetId(object.id, 'link')])}
             checkingLink={Boolean(linkChecking[object.id])}
             checkingServer={Boolean(serverChecking[object.id])}
             serverVersion={object.serverVersion ?? null}
             serverVersionError={serverVersionErrors[object.id] ?? null}
-            serverResources={DEBUG_SERVER_RESOURCES}
+            serverResources={EMPTY_SERVER_RESOURCES}
             camerasPreviewLoading={Boolean(camerasPreviewLoading[object.id])}
             megaphonesStatusLoading={Boolean(megaphonesStatusLoading[object.id])}
             camerasMetricFailed={Boolean(camerasMetricFailed[object.id])}
             megaphonesMetricFailed={Boolean(megaphonesMetricFailed[object.id])}
+            sensorsRefreshLoading={Boolean(sensorsRefreshLoading[object.id])}
             now={uiClock}
             onEdit={openEditEditor}
+            onRefreshMetric={refreshMetricBlock}
           />
         ))}
       </div>
 
-      {snapshot.objects.length === 0 && (
+      {sortedObjects.length === 0 && (
         <p className="mt-6 text-center text-[15px] font-medium text-label-secondary">
           Нет объектов для отслеживания
         </p>
