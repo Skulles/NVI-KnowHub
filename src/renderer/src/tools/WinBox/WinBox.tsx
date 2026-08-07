@@ -2312,7 +2312,7 @@ function MikrotikConfigGenerator() {
       
       </header>
 
-      <div className="grid w-full grid-cols-3 gap-3">
+      <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {MIKROTIK_CONFIG_DEVICES.map((d) => {
           const isActive = modalOpen && deviceId === d.id
           return (
@@ -2549,7 +2549,7 @@ export function WinBox() {
       ? 'Загружаю…'
       : needsDownload
         ? 'Загрузить'
-        : 'Открыть'
+        : 'Открыть WinBox'
   const updateLabel =
     downloading && downloadKind === 'update'
       ? 'Обновляю…'
@@ -2561,7 +2561,7 @@ export function WinBox() {
     'inline-flex shrink-0 items-center justify-center rounded-md px-2.5 py-1.5 text-[12px] font-semibold tracking-tight shadow-sm transition-colors duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-window'
 
   return (
-    <article style={{ paddingBottom: 50, margin: '0 auto' }} className="max-w-[36rem]">
+    <article className="max-w-[64rem] pb-12">
       {/* header */}
       <header className="mb-8">
         <div className="mb-3 flex items-center gap-3">
