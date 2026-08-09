@@ -74,6 +74,19 @@ export interface MonitoringVersionResult {
   error?: string
 }
 
+export interface MonitoringServerResourcesResult {
+  id: string
+  host: string
+  ok: boolean
+  cpuLoad: number | null
+  cpuTempC: number | null
+  gpuLoad: number | null
+  gpuTempC: number | null
+  ramLoad: number | null
+  checkedAt: number
+  error?: string
+}
+
 /** Camera stream config from /gateway/config/streams. */
 export interface MonitoringCameraStream {
   id: number
@@ -233,6 +246,7 @@ export interface ElectronAPI {
   monitoringPing(targets: MonitoringPingTarget[]): Promise<MonitoringPingResult[]>
   monitoringHttpProbe(targets: MonitoringHttpTarget[]): Promise<MonitoringHttpResult[]>
   monitoringFetchVersion(request: MonitoringVersionRequest): Promise<MonitoringVersionResult>
+  monitoringFetchServerResources(request: MonitoringAuthRequest): Promise<MonitoringServerResourcesResult>
   monitoringFetchStreams(request: MonitoringAuthRequest): Promise<MonitoringStreamsResult>
   monitoringFetchLocations(request: MonitoringAuthRequest): Promise<MonitoringLocationsResult>
   monitoringPreviewCameras(request: MonitoringPreviewRequest): Promise<MonitoringPreviewResult>

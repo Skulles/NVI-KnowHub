@@ -57,6 +57,8 @@ const api: ElectronAPI = {
   monitoringPing: (targets) => ipcRenderer.invoke('monitoring:ping', targets),
   monitoringHttpProbe: (targets) => ipcRenderer.invoke('monitoring:http-probe', targets),
   monitoringFetchVersion: (request) => ipcRenderer.invoke('monitoring:fetch-version', request),
+  monitoringFetchServerResources: (request) =>
+    ipcRenderer.invoke('monitoring:fetch-server-resources', request),
   monitoringFetchStreams: (request) => ipcRenderer.invoke('monitoring:fetch-streams', request),
   monitoringFetchLocations: (request) => ipcRenderer.invoke('monitoring:fetch-locations', request),
   monitoringPreviewCameras: (request) => ipcRenderer.invoke('monitoring:preview-cameras', request),

@@ -1,0 +1,143 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`RouterOS config golden outputs > preserves legacy link configs and combined download 1`] = `
+{
+  "content": "OWLGUARD ID: 1234
+AP: 10.12.34.210/24
+Station 1: 10.12.34.211/24
+Station 2: 10.12.34.212/24
+Протокол: nv2
+Диапазон: 5 ГГц
+Частота: 5765 МГц
+Пароль: LinkPass
+Логин: admin
+Пароль администратора: AdminPass
+
+================================================
+
+=== AP: OWL1234-GrooveA52-ap ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wlan1
+/interface wireless set [find default-name=wlan1] disabled=no mode=ap-bridge band=5ghz-a/n/ac frequency=5765 channel-width=20mhz skip-dfs-channels=all installation=outdoor antenna-gain=8 country=russia wireless-protocol=nv2 ssid="owl1234-GrooveA52" nv2-security=enabled nv2-preshared-key="LinkPass"
+/ip address add address=10.12.34.210/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-GrooveA52-ap"
+/user set admin password=AdminPass
+/log info message="done"
+
+=== Station 1: OWL1234-GrooveA52-station1 ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wlan1
+/interface wireless set [find default-name=wlan1] disabled=no mode=station band=5ghz-a/n/ac frequency=5765 channel-width=20mhz skip-dfs-channels=all installation=outdoor antenna-gain=8 country=russia scan-list=5765 wireless-protocol=nv2 ssid="owl1234-GrooveA52" nv2-security=enabled nv2-preshared-key="LinkPass"
+/ip address add address=10.12.34.211/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-GrooveA52-station1"
+/user set admin password=AdminPass
+/log info message="done"
+
+=== Station 2: OWL1234-GrooveA52-station2 ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wlan1
+/interface wireless set [find default-name=wlan1] disabled=no mode=station band=5ghz-a/n/ac frequency=5765 channel-width=20mhz skip-dfs-channels=all installation=outdoor antenna-gain=8 country=russia scan-list=5765 wireless-protocol=nv2 ssid="owl1234-GrooveA52" nv2-security=enabled nv2-preshared-key="LinkPass"
+/ip address add address=10.12.34.212/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-GrooveA52-station2"
+/user set admin password=AdminPass
+/log info message="done"",
+  "fileName": "owl1234-GrooveA52-config.txt",
+}
+`;
+
+exports[`RouterOS config golden outputs > preserves w60g link configs and combined download 1`] = `
+{
+  "content": "OWLGUARD ID: 1234
+AP: 10.12.34.210/24
+Station: 10.12.34.211/24
+Канал: 58320 (58.32 ГГц)
+Пароль: LinkPass
+Логин: admin
+Пароль администратора: AdminPass
+
+================================================
+
+=== AP: OWL1234-nRAY-ap ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wlan60-1
+/interface w60g set wlan60-1 disabled=no mode=bridge frequency=58320 region=eu ssid="owl1234-nRAY" password="LinkPass" put-stations-in-bridge=bridge-lan isolate-stations=yes
+/ip address add address=10.12.34.210/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-nRAY-ap"
+/user set admin password=AdminPass
+/log info message="done"
+
+=== Station: OWL1234-nRAY-station ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wlan60-1
+/interface w60g set wlan60-1 disabled=no mode=station-bridge frequency=auto scan-list=58320 region=eu ssid="owl1234-nRAY" password="LinkPass"
+/ip address add address=10.12.34.211/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-nRAY-station"
+/user set admin password=AdminPass
+/log info message="done"",
+  "fileName": "owl1234-nRAY-config.txt",
+}
+`;
+
+exports[`RouterOS config golden outputs > preserves wifi link configs and combined download 1`] = `
+{
+  "content": "OWLGUARD ID: 1234
+AP: 10.12.34.210/24
+Station: 10.12.34.211/24
+Диапазон: 5 ГГц
+Частота: 5765 МГц
+Пароль: LinkPass
+Логин: admin
+Пароль администратора: AdminPass
+
+================================================
+
+=== AP: OWL1234-mANTBoxAx15s-ap ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wifi2
+/interface wifi set [find default-name=wifi2] disabled=no configuration.mode=ap configuration.ssid="owl1234-mANTBoxAx15s" configuration.country=Russia configuration.antenna-gain=15 security.authentication-types=wpa2-psk security.passphrase="LinkPass" channel.band=5ghz-ax channel.frequency=5765 channel.width=20mhz channel.skip-dfs-channels=all
+/interface wifi set [find default-name=wifi1] disabled=yes
+/ip address add address=10.12.34.210/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-mANTBoxAx15s-ap"
+/user set admin password=AdminPass
+/log info message="done"
+
+=== Station: OWL1234-mANTBoxAx15s-station ===
+
+/interface bridge add name=bridge-lan
+/interface bridge port add bridge=bridge-lan interface=ether1
+/interface bridge port add bridge=bridge-lan interface=wifi2
+/interface wifi set [find default-name=wifi2] disabled=no configuration.mode=station-bridge configuration.ssid="owl1234-mANTBoxAx15s" configuration.country=Russia configuration.antenna-gain=15 security.authentication-types=wpa2-psk security.passphrase="LinkPass" channel.band=5ghz-ax channel.frequency=5765 channel.width=20mhz channel.skip-dfs-channels=all
+/interface wifi set [find default-name=wifi1] disabled=yes
+/ip address add address=10.12.34.211/24 network=10.12.34.0 interface=bridge-lan
+
+/tool romon set enabled=yes
+/system identity set name="OWL1234-mANTBoxAx15s-station"
+/user set admin password=AdminPass
+/log info message="done"",
+  "fileName": "owl1234-mANTBoxAx15s-config.txt",
+}
+`;

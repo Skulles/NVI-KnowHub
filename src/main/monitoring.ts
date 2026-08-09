@@ -22,6 +22,7 @@ import type {
   MonitoringPingTarget,
   MonitoringPreviewRequest,
   MonitoringPreviewResult,
+  MonitoringServerResourcesResult,
   MonitoringStreamsResult,
   MonitoringVersionRequest,
   MonitoringVersionResult
@@ -34,7 +35,9 @@ const PING_COUNT = 3
 const HTTP_PROBE_TIMEOUT_MS = 3000
 const AUTH_TIMEOUT_MS = 10000
 const API_TIMEOUT_MS = 15000
-const PREVIEW_TIMEOUT_MS = 45000
+const GRAFANA_OIDC_TIMEOUT_MS = 30000
+const GRAFANA_SESSION_TTL_MS = 30 * 60_000
+const PREVIEW_TIMEOUT_MS = 60000
 const MAX_TARGETS_PER_REQUEST = 80
 const PING_CONCURRENCY = 3
 const HTTP_PROBE_CONCURRENCY = 3
@@ -69,6 +72,596 @@ interface CachedToken {
 const tokenCache = new Map<string, CachedToken>()
 /** Deduplicate concurrent password/refresh grants for the same credentials. */
 const tokenInflight = new Map<string, Promise<string>>()
+
+interface SessionCookie {
+  name: string
+  value: string
+  domain: string
+  path: string
+  secure: boolean
+  hostOnly: boolean
+}
+
+class SessionCookieJar {
+  private readonly cookies = new Map<string, SessionCookie>()
+
+  store(url: URL, headers: Headers): void {
+    const combined = headers.get('set-cookie')
+    if (!combined) return
+
+    for (const rawCookie of combined.split(/,(?=\s*[^;,=\s]+=[^;,]*)/)) {
+      const parts = rawCookie.split(';')
+      const separator = parts[0].indexOf('=')
+      if (separator <= 0) continue
+
+      const name = parts[0].slice(0, separator).trim()
+      const value = parts[0].slice(separator + 1).trim()
+      let domain = url.hostname.toLowerCase()
+      let path = defaultCookiePath(url.pathname)
+      let secure = false
+      let hostOnly = true
+      let remove = false
+
+      for (const rawAttribute of parts.slice(1)) {
+        const [rawName, ...rawValueParts] = rawAttribute.trim().split('=')
+        const attributeName = rawName.toLowerCase()
+        const attributeValue = rawValueParts.join('=').trim()
+        if (attributeName === 'domain' && attributeValue) {
+          domain = attributeValue.replace(/^\./, '').toLowerCase()
+          hostOnly = false
+        } else if (attributeName === 'path' && attributeValue.startsWith('/')) {
+          path = attributeValue
+        } else if (attributeName === 'secure') {
+          secure = true
+        } else if (attributeName === 'max-age' && Number(attributeValue) <= 0) {
+          remove = true
+        }
+      }
+
+      const key = `${domain}\0${path}\0${name}`
+      if (remove || !value) {
+        this.cookies.delete(key)
+      } else {
+        this.cookies.set(key, { name, value, domain, path, secure, hostOnly })
+      }
+    }
+  }
+
+  header(url: URL): string {
+    return [...this.cookies.values()]
+      .filter((cookie) => {
+        const hostname = url.hostname.toLowerCase()
+        const domainMatches = cookie.hostOnly
+          ? hostname === cookie.domain
+          : hostname === cookie.domain || hostname.endsWith(`.${cookie.domain}`)
+        const pathMatches =
+          url.pathname === cookie.path ||
+          url.pathname.startsWith(cookie.path.endsWith('/') ? cookie.path : `${cookie.path}/`)
+        return domainMatches && pathMatches && (!cookie.secure || url.protocol === 'https:')
+      })
+      .sort((left, right) => right.path.length - left.path.length)
+      .map((cookie) => `${cookie.name}=${cookie.value}`)
+      .join('; ')
+  }
+
+  get(name: string): SessionCookie | null {
+    return [...this.cookies.values()].find((cookie) => cookie.name === name) ?? null
+  }
+}
+
+interface CachedGrafanaSession {
+  jar: SessionCookieJar
+  expiresAt: number
+}
+
+const grafanaSessionCache = new Map<string, CachedGrafanaSession>()
+const grafanaSessionInflight = new Map<string, Promise<SessionCookieJar>>()
+
+function defaultCookiePath(pathname: string): string {
+  if (!pathname.startsWith('/') || pathname === '/') return '/'
+  const lastSlash = pathname.lastIndexOf('/')
+  return lastSlash <= 0 ? '/' : pathname.slice(0, lastSlash)
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => String.fromCodePoint(Number(decimal)))
+}
+
+function parseHtmlAttributes(tag: string): Record<string, string> {
+  const attributes: Record<string, string> = {}
+  const pattern = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g
+  for (const match of tag.matchAll(pattern)) {
+    attributes[match[1].toLowerCase()] = decodeHtmlAttribute(match[2] ?? match[3] ?? match[4] ?? '')
+  }
+  return attributes
+}
+
+function parseKeycloakLoginForm(
+  html: string,
+  pageUrl: string
+): { action: string; fields: URLSearchParams } | null {
+  for (const match of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const formAttributes = parseHtmlAttributes(match[1])
+    const action = formAttributes.action ?? ''
+    if (formAttributes.id !== 'kc-form-login' && !action.includes('login-actions/authenticate')) continue
+
+    const fields = new URLSearchParams()
+    for (const input of match[2].matchAll(/<input\b([^>]*)>/gi)) {
+      const attributes = parseHtmlAttributes(input[1])
+      if (attributes.name) fields.set(attributes.name, attributes.value ?? '')
+    }
+    return { action: new URL(action, pageUrl).toString(), fields }
+  }
+  return null
+}
+
+async function fetchWithCookieRedirects(
+  initialUrl: string,
+  jar: SessionCookieJar,
+  init: RequestInit = {}
+): Promise<{ response: Response; url: string }> {
+  let url = initialUrl
+  let method = init.method ?? 'GET'
+  let body = init.body
+  const baseHeaders = new Headers(init.headers)
+
+  for (let redirectCount = 0; redirectCount <= 20; redirectCount += 1) {
+    const currentUrl = new URL(url)
+    const headers = new Headers(baseHeaders)
+    const cookieHeader = jar.header(currentUrl)
+    if (cookieHeader) headers.set('Cookie', cookieHeader)
+    else headers.delete('Cookie')
+
+    const response = await fetch(url, { ...init, method, body, headers, redirect: 'manual' })
+    jar.store(currentUrl, response.headers)
+
+    const location = response.headers.get('location')
+    if (response.status < 300 || response.status >= 400 || !location) {
+      return { response, url }
+    }
+
+    if (response.body) await response.body.cancel()
+    url = new URL(location, url).toString()
+
+    if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
+      method = 'GET'
+      body = undefined
+      baseHeaders.delete('Content-Type')
+      baseHeaders.delete('Content-Length')
+    }
+  }
+
+  throw new Error('Слишком много OIDC-редиректов')
+}
+
+async function loginGrafanaOidc(
+  host: string,
+  username: string,
+  password: string
+): Promise<SessionCookieJar> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), GRAFANA_OIDC_TIMEOUT_MS)
+  const jar = new SessionCookieJar()
+
+  try {
+    const login = await fetchWithCookieRedirects(
+      `http://${host}/monitor/login/generic_oauth`,
+      jar,
+      { signal: controller.signal }
+    )
+    const loginHtml = await login.response.text()
+    const form = parseKeycloakLoginForm(loginHtml, login.url)
+    if (!form) {
+      throw new Error(`форма входа Keycloak не найдена (HTTP ${login.response.status})`)
+    }
+
+    form.fields.set('username', username)
+    form.fields.set('password', password)
+    const callback = await fetchWithCookieRedirects(form.action, jar, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.fields.toString(),
+      signal: controller.signal
+    })
+    if (callback.response.body) await callback.response.body.cancel()
+
+    const sessionCookie = jar.get('grafana_session')
+    if (!sessionCookie) {
+      throw new Error(`callback не установил grafana_session (HTTP ${callback.response.status})`)
+    }
+
+    const maskedValue =
+      sessionCookie.value.length > 12
+        ? `${sessionCookie.value.slice(0, 6)}…${sessionCookie.value.slice(-4)}`
+        : '***'
+    console.log(
+      `[monitoring] Grafana OIDC ok host=${host} grafana_session=${maskedValue} length=${sessionCookie.value.length} path=${sessionCookie.path}`
+    )
+    return jar
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function obtainGrafanaSession(
+  host: string,
+  username: string,
+  password: string
+): Promise<SessionCookieJar> {
+  const key = tokenCacheKey(host, username, password)
+  const cached = grafanaSessionCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.jar
+
+  const inflight = grafanaSessionInflight.get(key)
+  if (inflight) return inflight
+
+  const pending = loginGrafanaOidc(host, username, password)
+    .then((jar) => {
+      grafanaSessionCache.set(key, { jar, expiresAt: Date.now() + GRAFANA_SESSION_TTL_MS })
+      return jar
+    })
+    .finally(() => {
+      if (grafanaSessionInflight.get(key) === pending) grafanaSessionInflight.delete(key)
+    })
+  grafanaSessionInflight.set(key, pending)
+  return pending
+}
+
+function grafanaCpuHostTag(host: string): string {
+  const parts = host.split('.')
+  return `owl${parts[1]}${parts[2]}`
+}
+
+function parseLatestGrafanaMetric(
+  payload: unknown,
+  refId: string,
+  fieldName: string
+): number {
+  if (!isPlainObject(payload) || !isPlainObject(payload.results)) {
+    throw new Error('Grafana вернула некорректный ответ')
+  }
+  const result = payload.results[refId]
+  if (!isPlainObject(result) || !Array.isArray(result.frames)) {
+    throw new Error(`В ответе Grafana нет серии ${fieldName}`)
+  }
+
+  const samples: number[] = []
+  for (const frame of result.frames) {
+    if (!isPlainObject(frame) || !isPlainObject(frame.schema) || !isPlainObject(frame.data)) continue
+    if (!Array.isArray(frame.schema.fields) || !Array.isArray(frame.data.values)) continue
+
+    const valueIndex = frame.schema.fields.findIndex(
+      (field) => isPlainObject(field) && field.name === fieldName
+    )
+    const values = valueIndex >= 0 ? frame.data.values[valueIndex] : frame.data.values[1]
+    if (!Array.isArray(values)) continue
+
+    let latest: number | null = null
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      const numeric = typeof values[index] === 'number' ? values[index] : Number(values[index])
+      if (Number.isFinite(numeric)) {
+        latest = numeric
+        break
+      }
+    }
+    if (latest === null) continue
+
+    samples.push(latest)
+  }
+
+  const value =
+    samples.length > 0
+      ? samples.reduce((sum, sample) => sum + sample, 0) / samples.length
+      : Number.NaN
+  if (!Number.isFinite(value)) throw new Error(`Grafana не вернула значение ${fieldName}`)
+  return Math.max(0, Math.min(100, value))
+}
+
+function parseLatestCpuPackageTemp(payload: unknown): number {
+  if (!isPlainObject(payload) || !isPlainObject(payload.results)) {
+    throw new Error('Grafana вернула некорректный ответ температуры CPU')
+  }
+  const result = payload.results.D
+  if (!isPlainObject(result) || !Array.isArray(result.frames)) {
+    throw new Error('В ответе Grafana нет серии температуры CPU')
+  }
+
+  const latestBySensor = new Map<string, { at: number; value: number }>()
+  const seenSensors = new Set<string>()
+  const extractPackageSensor = (value: unknown): string => {
+    if (typeof value !== 'string') return ''
+    const trimmed = value.trim()
+    if (trimmed) seenSensors.add(trimmed)
+    return trimmed.match(/coretemp_package(?:_id_\d+)?/i)?.[0].toLowerCase() ?? ''
+  }
+
+  for (const frame of result.frames) {
+    if (!isPlainObject(frame) || !isPlainObject(frame.schema) || !isPlainObject(frame.data)) continue
+    if (!Array.isArray(frame.schema.fields) || !Array.isArray(frame.data.values)) continue
+
+    const tempIndex = frame.schema.fields.findIndex(
+      (field) =>
+        isPlainObject(field) &&
+        typeof field.name === 'string' &&
+        field.name.toLowerCase() === 'temp'
+    )
+    const sensorIndex = frame.schema.fields.findIndex(
+      (field) =>
+        isPlainObject(field) &&
+        typeof field.name === 'string' &&
+        field.name.toLowerCase() === 'sensor'
+    )
+    const timeIndex = frame.schema.fields.findIndex(
+      (field) =>
+        isPlainObject(field) &&
+        typeof field.name === 'string' &&
+        field.name.toLowerCase() === 'time'
+    )
+    if (tempIndex < 0 || !Array.isArray(frame.data.values[tempIndex])) continue
+
+    const tempValues = frame.data.values[tempIndex] as unknown[]
+    const sensorValues =
+      sensorIndex >= 0 && Array.isArray(frame.data.values[sensorIndex])
+        ? (frame.data.values[sensorIndex] as unknown[])
+        : null
+    const timeValues =
+      timeIndex >= 0 && Array.isArray(frame.data.values[timeIndex])
+        ? (frame.data.values[timeIndex] as unknown[])
+        : null
+    let frameSensor = extractPackageSensor(frame.schema.name)
+    for (const field of frame.schema.fields) {
+      if (!isPlainObject(field)) continue
+      if (!frameSensor) frameSensor = extractPackageSensor(field.name)
+      if (!isPlainObject(field.labels)) continue
+      for (const [label, labelValue] of Object.entries(field.labels)) {
+        if (!frameSensor && (label.toLowerCase().includes('sensor') || typeof labelValue === 'string')) {
+          frameSensor = extractPackageSensor(labelValue)
+        }
+      }
+    }
+
+    for (let index = 0; index < tempValues.length; index += 1) {
+      const sensor = extractPackageSensor(sensorValues?.[index]) || frameSensor
+      if (!sensor) continue
+
+      const rawTemp = tempValues[index]
+      const value = typeof rawTemp === 'number' ? rawTemp : Number(rawTemp)
+      if (!Number.isFinite(value)) continue
+
+      const rawTime = timeValues?.[index]
+      const numericTime = typeof rawTime === 'number' ? rawTime : Number(rawTime)
+      const parsedTime =
+        Number.isFinite(numericTime) && rawTime !== null && rawTime !== ''
+          ? numericTime
+          : typeof rawTime === 'string'
+            ? Date.parse(rawTime)
+            : index
+      const at = Number.isFinite(parsedTime) ? parsedTime : index
+      const current = latestBySensor.get(sensor)
+      if (!current || at > current.at) latestBySensor.set(sensor, { at, value })
+    }
+  }
+
+  const temperatures = [...latestBySensor.values()].map((sample) => sample.value)
+  if (temperatures.length === 0) {
+    const discovered = [...seenSensors].slice(0, 12).join(', ')
+    throw new Error(
+      discovered
+        ? `Grafana не вернула coretemp_package; найдены: ${discovered}`
+        : 'Grafana не вернула coretemp_package и метки sensor'
+    )
+  }
+  return Math.max(...temperatures)
+}
+
+async function fetchGrafanaServerResources(
+  request: MonitoringAuthRequest
+): Promise<MonitoringServerResourcesResult> {
+  const checkedAt = Date.now()
+  const cacheKey = tokenCacheKey(request.host, request.username, request.password)
+
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const jar = await obtainGrafanaSession(request.host, request.username, request.password)
+      const endpoint = new URL(`http://${request.host}/monitor/api/ds/query`)
+      endpoint.searchParams.set('ds_type', 'influxdb')
+      endpoint.searchParams.set('requestId', `RES${Date.now()}`)
+      const now = Date.now()
+      const body = {
+        from: String(now - 5 * 60_000),
+        to: String(now),
+        queries: [
+          {
+            refId: 'A',
+            dataset: 'iox',
+            datasource: { type: 'influxdb', uid: 'influxdb_datasource' },
+            editorMode: 'builder',
+            format: 'time_series',
+            query: `SELECT "usage_active", "time" FROM "cpu" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" DESC LIMIT 1`,
+            rawQuery: true,
+            rawSql: `SELECT "usage_active", "time" FROM "cpu" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" DESC LIMIT 1`,
+            table: 'cpu',
+            datasourceId: 1,
+            intervalMs: 500,
+            maxDataPoints: 1
+          },
+          {
+            refId: 'B',
+            dataset: 'iox',
+            datasource: { type: 'influxdb', uid: 'influxdb_datasource' },
+            editorMode: 'code',
+            format: 'time_series',
+            query: `SELECT "utilization_gpu", "temperature_gpu", "time" FROM "nvidia_smi" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" DESC LIMIT 1`,
+            rawQuery: true,
+            rawSql: `SELECT "utilization_gpu", "temperature_gpu", "time" FROM "nvidia_smi" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" DESC LIMIT 1`,
+            table: 'nvidia_smi',
+            datasourceId: 1,
+            intervalMs: 500,
+            maxDataPoints: 1
+          },
+          {
+            refId: 'C',
+            dataset: 'iox',
+            datasource: { type: 'influxdb', uid: 'influxdb_datasource' },
+            editorMode: 'code',
+            format: 'time_series',
+            query: `SELECT "used_percent", "time" FROM "mem" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" DESC LIMIT 1`,
+            rawQuery: true,
+            rawSql: `SELECT "used_percent", "time" FROM "mem" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" DESC LIMIT 1`,
+            table: 'mem',
+            datasourceId: 1,
+            intervalMs: 500,
+            maxDataPoints: 1
+          },
+          {
+            refId: 'D',
+            dataset: 'iox',
+            datasource: { type: 'influxdb', uid: 'influxdb_datasource' },
+            editorMode: 'code',
+            format: 'time_series',
+            query: `SELECT "temp", "sensor", "time" FROM "temp" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" ASC`,
+            rawQuery: true,
+            rawSql: `SELECT "temp", "sensor", "time" FROM "temp" WHERE "time" >= $__timeFrom AND "time" <= $__timeTo AND "host" = '${grafanaCpuHostTag(request.host)}' ORDER BY "time" ASC`,
+            table: 'temp',
+            datasourceId: 1,
+            intervalMs: 2000,
+            maxDataPoints: 512
+          }
+        ]
+      }
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          redirect: 'manual',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Cookie: jar.header(endpoint),
+            Origin: `http://${request.host}`,
+            Referer: `http://${request.host}/monitor/`
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        })
+        jar.store(endpoint, response.headers)
+
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          (response.status >= 300 && response.status < 400)
+        ) {
+          if (response.body) await response.body.cancel()
+          grafanaSessionCache.delete(cacheKey)
+          if (attempt === 0) continue
+          throw new Error(`Grafana отклонила сессию: HTTP ${response.status}`)
+        }
+
+        const text = await response.text()
+        let payload: unknown
+        try {
+          payload = JSON.parse(text)
+        } catch {
+          throw new Error(
+            response.ok
+              ? 'Grafana resources API вернула не JSON'
+              : `Grafana resources API: HTTP ${response.status} ${text.slice(0, 160)}`
+          )
+        }
+
+        const queryErrors: string[] = []
+        if (isPlainObject(payload) && isPlainObject(payload.results)) {
+          for (const [refId, queryResult] of Object.entries(payload.results)) {
+            if (isPlainObject(queryResult) && typeof queryResult.error === 'string') {
+              queryErrors.push(`${refId}: ${queryResult.error}`)
+            }
+          }
+        }
+        if (!response.ok && queryErrors.length > 0) {
+          console.warn(
+            `[monitoring] Grafana resources partial host=${request.host} HTTP ${response.status}: ${queryErrors.join('; ')}`
+          )
+        }
+
+        let cpuLoad: number
+        try {
+          cpuLoad = parseLatestGrafanaMetric(payload, 'A', 'usage_active')
+        } catch (error) {
+          if (!response.ok) {
+            throw new Error(
+              `Grafana resources API: HTTP ${response.status}${queryErrors.length ? ` ${queryErrors.join('; ')}` : ''}`
+            )
+          }
+          throw error
+        }
+        let cpuTempC: number | null = null
+        try {
+          cpuTempC = parseLatestCpuPackageTemp(payload)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'неизвестный формат'
+          console.warn(`[monitoring] Grafana CPU temperature host=${request.host}: ${message}`)
+        }
+        let gpuLoad: number | null = null
+        try {
+          gpuLoad = parseLatestGrafanaMetric(payload, 'B', 'utilization_gpu')
+        } catch {
+          // GPU telemetry is optional: CPU should still be displayed on hosts without NVIDIA data.
+        }
+        let gpuTempC: number | null = null
+        try {
+          gpuTempC = parseLatestGrafanaMetric(payload, 'B', 'temperature_gpu')
+        } catch {
+          // Temperature may be absent even when GPU utilization is available.
+        }
+        let ramLoad: number | null = null
+        try {
+          ramLoad = parseLatestGrafanaMetric(payload, 'C', 'used_percent')
+        } catch {
+          // Keep the other resource values when memory telemetry is temporarily unavailable.
+        }
+        console.log(
+          `[monitoring] Grafana resources host=${request.host} cpu=${cpuLoad.toFixed(1)}% cpuTemp=${cpuTempC === null ? 'N/A' : `${cpuTempC.toFixed(1)}C`} gpu=${gpuLoad === null ? 'N/A' : `${gpuLoad.toFixed(1)}%`} gpuTemp=${gpuTempC === null ? 'N/A' : `${gpuTempC.toFixed(1)}C`} ram=${ramLoad === null ? 'N/A' : `${ramLoad.toFixed(1)}%`}`
+        )
+        return {
+          id: request.id,
+          host: request.host,
+          ok: true,
+          cpuLoad,
+          cpuTempC,
+          gpuLoad,
+          gpuTempC,
+          ramLoad,
+          checkedAt
+        }
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    throw new Error('Не удалось обновить сессию Grafana')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Не удалось получить ресурсы сервера'
+    console.warn(`[monitoring] Grafana resources failed host=${request.host}: ${message}`)
+    return {
+      id: request.id,
+      host: request.host,
+      ok: false,
+      cpuLoad: null,
+      cpuTempC: null,
+      gpuLoad: null,
+      gpuTempC: null,
+      ramLoad: null,
+      checkedAt,
+      error: message
+    }
+  }
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -420,6 +1013,10 @@ async function obtainAccessTokenUnlocked(host: string, username: string, passwor
     })
   )
   tokenCache.set(key, issued)
+  void obtainGrafanaSession(host, username, password).catch((error) => {
+    const message = error instanceof Error ? error.message : 'неизвестная ошибка'
+    console.warn(`[monitoring] Grafana OIDC failed host=${host}: ${message}`)
+  })
   return issued.accessToken
 }
 
@@ -1069,6 +1666,28 @@ export function setupMonitoring(): void {
       }
 
       return fetchOwlGuardVersion(request)
+    }
+  )
+
+  ipcMain.handle(
+    'monitoring:fetch-server-resources',
+    async (_, rawRequest: unknown): Promise<MonitoringServerResourcesResult> => {
+      const request = normalizeAuthRequest(rawRequest)
+      if (!request) {
+        return {
+          ...invalidAuthResult(rawRequest),
+          ok: false,
+          cpuLoad: null,
+          cpuTempC: null,
+          gpuLoad: null,
+          gpuTempC: null,
+          ramLoad: null,
+          checkedAt: Date.now(),
+          error: 'Некорректные данные для авторизации'
+        }
+      }
+
+      return fetchGrafanaServerResources(request)
     }
   )
 

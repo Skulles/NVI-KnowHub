@@ -156,12 +156,16 @@ function normalizeConfigs(value: unknown): SavedMikrotikConfig[] {
   return configs
 }
 
+export function parseWinboxConfigSnapshot(value: unknown): WinboxConfigSnapshot {
+  if (!value || typeof value !== 'object') return { ...DEFAULT, configs: [] }
+  return { configs: normalizeConfigs((value as { configs?: unknown }).configs) }
+}
+
 export function loadWinboxConfigs(): WinboxConfigSnapshot {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return { ...DEFAULT, configs: [] }
-    const parsed = JSON.parse(raw)
-    return { configs: normalizeConfigs(parsed?.configs) }
+    return parseWinboxConfigSnapshot(JSON.parse(raw))
   } catch {
     return { ...DEFAULT, configs: [] }
   }
