@@ -6,6 +6,7 @@ import {
   RouterIcon,
   XMarkIcon,
 } from "../../../components/Icons";
+import { CONFIG_REBOOT_NOTE } from "../routeros/lteIpsecConfig";
 import {
   getSavedConfigHeaderText,
   getSavedConfigPreviewText,
@@ -17,6 +18,7 @@ import {
 } from "../winboxConfigStorage";
 import { MIKROTIK_CONFIG_DEVICES } from "../winboxDevices";
 import {
+  CONFIG_APPLY_INSTRUCTION,
   ModalFooter,
   SegmentToggle,
   fieldControlClass,
@@ -108,7 +110,11 @@ export function SavedConfigModal({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-          <div className="flex flex-col gap-4">
+          <div
+            className={`flex flex-col ${
+              config.flow === "lte-ipsec" ? "gap-0" : "gap-4"
+            }`}
+          >
             <div className="flex flex-col gap-2">
               {headerText ? (
                 <pre className="m-0 font-mono text-[13px] leading-[1.7] text-label-secondary whitespace-pre-wrap">
@@ -116,7 +122,7 @@ export function SavedConfigModal({
                 </pre>
               ) : null}
               <span className="text-[13px] leading-relaxed text-label-tertiary">
-                Вставьте в терминал через WinBox или SSH.
+                {CONFIG_APPLY_INSTRUCTION}
               </span>
               {savedConfigHasRoleTabs(config) && (
                 <SegmentToggle<SavedConfigRole>
@@ -133,8 +139,15 @@ export function SavedConfigModal({
                 <code>{previewText || "(пусто)"}</code>
               </pre>
             </div>
+            {config.flow === "lte-ipsec" ? (
+              <p className="m-0 mt-3 text-center text-[13px] leading-relaxed text-amber-400">
+                {CONFIG_REBOOT_NOTE}
+              </p>
+            ) : null}
 
-            <ModalFooter>
+            <ModalFooter
+              className={config.flow === "lte-ipsec" ? "mt-2" : undefined}
+            >
               <button
                 type="button"
                 onClick={() => onDelete(config.id)}

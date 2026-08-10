@@ -46,7 +46,7 @@ export interface MonitoringSnapshot {
   objects: MonitoringObject[]
 }
 
-export const DEFAULT_SERVER_LOGIN = 'service'
+export const DEFAULT_SERVER_LOGIN = 'Operator'
 
 function normalizeCameraOnlineIds(value: unknown): number[] | undefined {
   if (!Array.isArray(value)) return undefined

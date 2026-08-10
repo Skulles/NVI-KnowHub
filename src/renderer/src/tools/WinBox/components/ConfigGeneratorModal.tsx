@@ -16,6 +16,7 @@ import type {
 } from "../winboxConfigTypes";
 import {
   CONFIG_FOOTER_NOTE,
+  CONFIG_REBOOT_NOTE,
   sanitizeWifiSsidInput,
 } from "../routeros/lteIpsecConfig";
 import { ipToOctets } from "../routeros/routerOsShared";
@@ -24,6 +25,7 @@ import { isPairLinkStack } from "../routeros/wirelessLinkConfig";
 import {
   BtnPrimary,
   BtnSecondary,
+  CONFIG_APPLY_INSTRUCTION,
   FieldLabel,
   FormAlert,
   GrooveaWirelessSettings,
@@ -695,10 +697,10 @@ export function ConfigGeneratorModal({
                   </ModalFooter>
                 </div>
               ) : (
-                <div className="flex flex-col gap-4">
+                <div className={`flex flex-col ${isGroovea ? "gap-4" : "gap-0"}`}>
                   <div className="flex flex-col gap-2">
                     <span className="text-[13px] leading-relaxed text-label-tertiary">
-                      Вставьте в терминал через WinBox или SSH.
+                      {CONFIG_APPLY_INSTRUCTION}
                     </span>
                     {isGroovea && (
                       <SegmentToggle<GrooveaRole>
@@ -718,8 +720,13 @@ export function ConfigGeneratorModal({
                       </code>
                     </pre>
                   </div>
+                  {!isGroovea ? (
+                    <p className="m-0 mt-3 text-center text-[13px] leading-relaxed text-amber-400">
+                      {CONFIG_REBOOT_NOTE}
+                    </p>
+                  ) : null}
 
-                  <ModalFooter>
+                  <ModalFooter className="mt-2">
                     <BtnSecondary onClick={() => setStep("settings")}>
                       Назад
                     </BtnSecondary>

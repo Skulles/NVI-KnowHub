@@ -81,10 +81,6 @@ describe('RouterOS config golden outputs', () => {
       /ip pool remove [find]
       /interface list member remove [find]
       /interface list remove [find]
-      /interface bridge port remove [find]
-      /interface wireless set [find default-name=wlan1] disabled=yes mode=station ssid=MikroTik security-profile=default
-      /interface wireless security-profiles remove [find where name!=default]
-      /interface bridge remove [find]
       /tool mac-server set allowed-interface-list=all
       /tool mac-server mac-winbox set allowed-interface-list=all
       /ip neighbor discovery-settings set discover-interface-list=all

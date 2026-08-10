@@ -63,7 +63,7 @@ const EMPTY_SERVER_RESOURCES: ServerResourceStubs = {
 }
 
 /** Temporary sample card for the new layout — remove after QA. */
-const SHOW_MONITORING_DEBUG_CARD = true
+const SHOW_MONITORING_DEBUG_CARD = false
 
 const MONITORING_VIEW_MODE_KEY = 'monitoring-view-mode'
 

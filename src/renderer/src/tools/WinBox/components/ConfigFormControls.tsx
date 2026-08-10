@@ -7,6 +7,9 @@ import type {
 } from "../winboxConfigTypes";
 import { NRAY_W60G_FREQUENCY } from "../routeros/wirelessLinkConfig";
 
+export const CONFIG_APPLY_INSTRUCTION =
+  "Вставьте команды в терминал устройства (можно все сразу), предварительно выполнив на нём сброс без настроек по умолчанию";
+
 export function IpOctetInput({
   value,
   onChange,
@@ -361,9 +364,17 @@ export function FormAlert({
   );
 }
 
-export function ModalFooter({ children }: { children: ReactNode }) {
+export function ModalFooter({
+  children,
+  className = "mt-5",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <footer className="mt-5 flex items-center justify-between gap-3 border-t border-surface-border/70 pt-4">
+    <footer
+      className={`flex items-center justify-between gap-3 border-t border-surface-border/70 pt-4 ${className}`}
+    >
       {children}
     </footer>
   );

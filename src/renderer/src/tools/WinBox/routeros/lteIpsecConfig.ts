@@ -6,6 +6,8 @@ import {
 } from './routerOsShared'
 
 export const CONFIG_FOOTER_NOTE = 'DHCP отключён. Маску и шлюз на клиентах укажите вручную.'
+export const CONFIG_REBOOT_NOTE =
+  'После применения конфигурации необходимо перезагрузить роутер'
 export const WIFI_SSID_MAX_BYTES = 32
 
 const MANAGEMENT_NETWORKS = ['10.33.12.0/24'] as const
@@ -245,10 +247,6 @@ function buildCleanupBlock(scriptCommands: string[] = []): string[] {
     `/ip pool remove [find]`,
     `/interface list member remove [find]`,
     `/interface list remove [find]`,
-    `/interface bridge port remove [find]`,
-    `/interface wireless set [find default-name=wlan1] disabled=yes mode=station ssid=MikroTik security-profile=default`,
-    `/interface wireless security-profiles remove [find where name!=default]`,
-    `/interface bridge remove [find]`,
     `/tool mac-server set allowed-interface-list=all`,
     `/tool mac-server mac-winbox set allowed-interface-list=all`,
     `/ip neighbor discovery-settings set discover-interface-list=all`,
