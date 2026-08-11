@@ -56,6 +56,7 @@ const api: ElectronAPI = {
 
   monitoringPing: (targets) => ipcRenderer.invoke('monitoring:ping', targets),
   monitoringHttpProbe: (targets) => ipcRenderer.invoke('monitoring:http-probe', targets),
+  monitoringGetLanHints: () => ipcRenderer.invoke('monitoring:get-lan-hints'),
   monitoringFetchVersion: (request) => ipcRenderer.invoke('monitoring:fetch-version', request),
   monitoringFetchServerResources: (request) =>
     ipcRenderer.invoke('monitoring:fetch-server-resources', request),

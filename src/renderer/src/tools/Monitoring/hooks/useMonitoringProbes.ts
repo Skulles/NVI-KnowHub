@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type {
   MonitoringHttpTarget,
+  MonitoringLanHints,
   MonitoringPingResult,
   MonitoringPingStatus,
   MonitoringPingTarget
@@ -11,6 +12,7 @@ import {
   type MonitoringSnapshot
 } from '../monitoringStorage'
 import { isCredentialAuthError, localizeMonitoringError } from '../monitoringErrors'
+import { resolveLanActiveObjectId } from '../monitoringLanScope'
 import type {
   IdFlagMap,
   LatencyHistoryMap,
@@ -40,11 +42,13 @@ import {
   updateSignalTier,
   type ObjectProbeSchedule
 } from '../monitoringSchedule'
+import { useDocumentVisible } from './useDocumentVisible'
 
 const LINK_LATENCY_HISTORY_LIMIT = 10
 const OWL_GUARD_UNREACHABLE = 'не удалось подключиться к OWL.Guard'
 const METRIC_RETRY_DELAY_MS = 2500
 const RESOURCE_METRIC_FLIP_MS = 5000
+const LAN_HINTS_INTERVAL_MS = 15_000
 
 function versionFetchKey(object: MonitoringObject): string {
   return `${object.id}|${object.serverHost}|${object.serverLogin}|${object.serverPassword}`
@@ -56,6 +60,14 @@ function targetId(objectId: string, kind: 'link' | 'server'): string {
 
 function isOnline(result: MonitoringPingResult | undefined): boolean {
   return (result?.status ?? 'unknown') === 'online'
+}
+
+function filterProbeObjects(
+  objects: MonitoringObject[],
+  lanActiveObjectId: string | null
+): MonitoringObject[] {
+  if (!lanActiveObjectId) return objects
+  return objects.filter((object) => object.id === lanActiveObjectId)
 }
 
 /** Objects that still need a first link and/or server result. */
@@ -117,9 +129,17 @@ function sameNumberList(a: number[] | undefined, b: number[]): boolean {
 interface UseMonitoringProbesOptions {
   snapshot: MonitoringSnapshot
   setSnapshot: Dispatch<SetStateAction<MonitoringSnapshot>>
+  /** False when Monitoring is keep-alive-mounted but not the active screen. */
+  screenActive?: boolean
 }
 
-export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProbesOptions) {
+export function useMonitoringProbes({
+  snapshot,
+  setSnapshot,
+  screenActive = true
+}: UseMonitoringProbesOptions) {
+  const documentVisible = useDocumentVisible()
+  const probesActive = screenActive && documentVisible
   const [results, setResults] = useState<ResultMap>({})
   const [latencyHistory, setLatencyHistory] = useState<LatencyHistoryMap>({})
   const [linkStatusHistory, setLinkStatusHistory] = useState<LinkStatusHistoryMap>({})
@@ -141,6 +161,8 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
   const [manualRefreshLoading, setManualRefreshLoading] = useState(false)
   /** Forces card re-render so link-stability window updates even when no probes are due. */
   const [uiClock, setUiClock] = useState(() => Date.now())
+  const [lanHints, setLanHints] = useState<MonitoringLanHints | null>(null)
+  const [lanActiveObjectId, setLanActiveObjectId] = useState<string | null>(null)
   const refreshingRef = useRef(false)
   const manualRefreshInFlightRef = useRef(false)
   const bootstrapInFlightRef = useRef(new Set<string>())
@@ -154,10 +176,14 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
   /** Bumped to ignore late IPC responses after link/server drop. */
   const probeEpochRef = useRef<Record<string, number>>({})
   const mountedRef = useRef(true)
+  const probesActiveRef = useRef(probesActive)
+  const lanActiveObjectIdRef = useRef(lanActiveObjectId)
   const snapshotRef = useRef(snapshot)
   const resultsRef = useRef(results)
   const linkStatusHistoryRef = useRef(linkStatusHistory)
   const linkUnstableFlagsRef = useRef(linkUnstableFlags)
+  probesActiveRef.current = probesActive
+  lanActiveObjectIdRef.current = lanActiveObjectId
   snapshotRef.current = snapshot
   resultsRef.current = results
   linkStatusHistoryRef.current = linkStatusHistory
@@ -171,9 +197,58 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
   }, [])
 
   useEffect(() => {
+    if (!probesActive) return
     const timer = window.setInterval(() => setUiClock(Date.now()), RESOURCE_METRIC_FLIP_MS)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [probesActive])
+
+  useEffect(() => {
+    if (!probesActive) return
+    const fetchHints = window.api?.monitoringGetLanHints
+    if (typeof fetchHints !== 'function') return
+
+    let cancelled = false
+    let timer: number | undefined
+
+    const run = async (): Promise<void> => {
+      if (cancelled || !probesActiveRef.current) return
+      try {
+        const hints = await fetchHints()
+        if (cancelled || !mountedRef.current) return
+        setLanHints(hints)
+      } catch {
+        // Keep previous hints; LAN mode simply won't engage without fresh data.
+      }
+      if (cancelled || !probesActiveRef.current) return
+      timer = window.setTimeout(run, LAN_HINTS_INTERVAL_MS)
+    }
+
+    void run()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [probesActive])
+
+  useEffect(() => {
+    const serverLatencyByObjectId: Record<string, number | null | undefined> = {}
+    const serverOnlineByObjectId: Record<string, boolean> = {}
+    for (const object of snapshot.objects) {
+      const result = results[targetId(object.id, 'server')]
+      serverLatencyByObjectId[object.id] = result?.latencyMs
+      serverOnlineByObjectId[object.id] = isOnline(result)
+    }
+
+    setLanActiveObjectId((current) =>
+      resolveLanActiveObjectId({
+        objects: snapshot.objects,
+        hints: lanHints,
+        serverLatencyByObjectId,
+        serverOnlineByObjectId,
+        currentLanObjectId: current
+      })
+    )
+  }, [lanHints, results, snapshot.objects])
 
   const getSchedule = useCallback((objectId: string): ObjectProbeSchedule => {
     const current = scheduleRef.current[objectId]
@@ -776,16 +851,19 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       if (!window.api) return
       const api = window.api
       const now = Date.now()
-      const objects = snapshotRef.current.objects
+      const allObjects = snapshotRef.current.objects
+      const objects = filterProbeObjects(allObjects, lanActiveObjectIdRef.current)
 
       // Drop schedules for removed objects.
-      const liveIds = new Set(objects.map((object) => object.id))
+      const liveIds = new Set(allObjects.map((object) => object.id))
       for (const id of Object.keys(scheduleRef.current)) {
         if (!liveIds.has(id)) delete scheduleRef.current[id]
       }
       for (const id of Object.keys(probeEpochRef.current)) {
         if (!liveIds.has(id)) delete probeEpochRef.current[id]
       }
+
+      if (!objects.length) return
 
       const catchUp = needsProbeCatchUp(objects, resultsRef.current)
       const linkLimit = linkBatchLimit(catchUp)
@@ -962,12 +1040,25 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
           const linkResults = await Promise.all(
             linkTargets.map(async (target, index) => {
               try {
-                const [result] = await api.monitoringPing([target])
-                setResults((prev) => ({ ...prev, [result.id]: result }))
                 const object = dueLinks[index]
+                const linkWasOnline = isOnline(resultsRef.current[target.id])
+                const [result] = await api.monitoringPing([target])
+                setResults((prev) => {
+                  const next = { ...prev, [result.id]: result }
+                  // Link just recovered — drop synthetic «нет ответа» until server probe finishes.
+                  if (result.status === 'online' && !linkWasOnline) {
+                    delete next[targetId(object.id, 'server')]
+                  }
+                  return next
+                })
                 const schedule = getSchedule(object.id)
-                if (result.status === 'online' && schedule.nextServerAt <= now) {
-                  void startServerProbe(object)
+                if (result.status === 'online') {
+                  if (!linkWasOnline) {
+                    schedule.nextServerAt = now
+                    void startServerProbe(object)
+                  } else if (schedule.nextServerAt <= now) {
+                    void startServerProbe(object)
+                  }
                 }
                 return result
               } finally {
@@ -1039,6 +1130,14 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
             const next = { ...prev }
             linkResults.forEach((result) => {
               next[result.id] = result
+              if (result.status === 'online') {
+                const objectId = result.id.replace(/:link$/, '')
+                const serverId = targetId(objectId, 'server')
+                // Keep checking UI if a server probe is already in flight after link recovery.
+                if (serverProbePromises.has(objectId) && next[serverId]?.status === 'offline') {
+                  delete next[serverId]
+                }
+              }
             })
             offlineServers.forEach((result) => {
               next[result.id] = result
@@ -1296,15 +1395,20 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
   }, [bumpProbeEpoch, getSchedule, runBootstrap])
 
   useEffect(() => {
-    if (!snapshot.objects.length) return
+    if (!probesActive || !snapshot.objects.length) return
 
     let cancelled = false
     let timer: number | undefined
 
     const run = async (): Promise<void> => {
+      if (cancelled || !probesActiveRef.current) return
       await refresh()
-      if (cancelled) return
-      const catchUp = needsProbeCatchUp(snapshotRef.current.objects, resultsRef.current)
+      if (cancelled || !probesActiveRef.current) return
+      const probeObjects = filterProbeObjects(
+        snapshotRef.current.objects,
+        lanActiveObjectIdRef.current
+      )
+      const catchUp = needsProbeCatchUp(probeObjects, resultsRef.current)
       timer = window.setTimeout(run, schedulerTickMs(catchUp))
     }
 
@@ -1314,18 +1418,19 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [refresh, objectsKey, snapshot.objects.length])
+  }, [probesActive, refresh, objectsKey, snapshot.objects.length])
 
   useEffect(() => {
+    if (!probesActive) return
     if (typeof window.api?.monitoringFetchServerResources !== 'function') return
 
     let cancelled = false
     let timer: number | undefined
 
     const runServerResourcesTick = async (): Promise<void> => {
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       const now = Date.now()
-      const due = snapshotRef.current.objects
+      const due = filterProbeObjects(snapshotRef.current.objects, lanActiveObjectIdRef.current)
         .filter((object) => {
           if (!object.serverPassword || serverResourcesInFlightRef.current.has(object.id)) return false
           if (!isOnline(resultsRef.current[targetId(object.id, 'server')])) return false
@@ -1342,7 +1447,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
           const schedule = getSchedule(object.id)
           schedule.nextServerResourcesAt = Number.MAX_SAFE_INTEGER
           const ok = await refreshServerResources(object)
-          if (cancelled) return
+          if (cancelled || !probesActiveRef.current) return
 
           if (ok) {
             schedule.serverResourcesFailures = 0
@@ -1356,7 +1461,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
         })
       )
 
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       timer = window.setTimeout(
         runServerResourcesTick,
         schedulerTickMs(due.length === MONITORING_MAX_RESOURCES_BATCH)
@@ -1368,9 +1473,10 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [getSchedule, objectsKey, refreshServerResources])
+  }, [probesActive, getSchedule, objectsKey, refreshServerResources])
 
   useEffect(() => {
+    if (!probesActive) return
     const previewCameras = window.api?.monitoringPreviewCameras
     if (typeof previewCameras !== 'function') return
 
@@ -1378,10 +1484,14 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
     let timer: number | undefined
 
     const runPreviewTick = (): void => {
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       const now = Date.now()
-      const catchUp = needsMetricsCatchUp(snapshotRef.current.objects, resultsRef.current)
-      const due = snapshotRef.current.objects
+      const probeObjects = filterProbeObjects(
+        snapshotRef.current.objects,
+        lanActiveObjectIdRef.current
+      )
+      const catchUp = needsMetricsCatchUp(probeObjects, resultsRef.current)
+      const due = probeObjects
         .filter((object) => {
           if (previewInFlightRef.current.has(object.id)) return false
           if (!object.serverPassword) return false
@@ -1476,7 +1586,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
           })
       })
 
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       timer = window.setTimeout(runPreviewTick, schedulerTickMs(catchUp || due.length > 0))
     }
 
@@ -1485,9 +1595,10 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [getSchedule, objectsKey, setSnapshot])
+  }, [probesActive, getSchedule, objectsKey, setSnapshot])
 
   useEffect(() => {
+    if (!probesActive) return
     const fetchMegaphoneStatuses = window.api?.monitoringFetchMegaphoneStatuses
     if (typeof fetchMegaphoneStatuses !== 'function') return
 
@@ -1495,10 +1606,14 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
     let timer: number | undefined
 
     const runMegaphoneStatusTick = (): void => {
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       const now = Date.now()
-      const catchUp = needsMetricsCatchUp(snapshotRef.current.objects, resultsRef.current)
-      const due = snapshotRef.current.objects
+      const probeObjects = filterProbeObjects(
+        snapshotRef.current.objects,
+        lanActiveObjectIdRef.current
+      )
+      const catchUp = needsMetricsCatchUp(probeObjects, resultsRef.current)
+      const due = probeObjects
         .filter((object) => {
           if (megaphoneStatusInFlightRef.current.has(object.id)) return false
           if (!object.serverPassword) return false
@@ -1595,7 +1710,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
           })
       })
 
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       timer = window.setTimeout(runMegaphoneStatusTick, schedulerTickMs(catchUp || due.length > 0))
     }
 
@@ -1604,9 +1719,10 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [getSchedule, objectsKey, setSnapshot])
+  }, [probesActive, getSchedule, objectsKey, setSnapshot])
 
   useEffect(() => {
+    if (!probesActive) return
     const probeDevices = window.api?.monitoringProbeDevices
     if (typeof probeDevices !== 'function') return
 
@@ -1614,10 +1730,14 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
     let timer: number | undefined
 
     const runDeviceProbeTick = (): void => {
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       const now = Date.now()
-      const catchUp = needsMetricsCatchUp(snapshotRef.current.objects, resultsRef.current)
-      const due = snapshotRef.current.objects
+      const probeObjects = filterProbeObjects(
+        snapshotRef.current.objects,
+        lanActiveObjectIdRef.current
+      )
+      const catchUp = needsMetricsCatchUp(probeObjects, resultsRef.current)
+      const due = probeObjects
         .filter((object) => {
           if (deviceProbeInFlightRef.current.has(object.id)) return false
           if (!object.serverPassword) return false
@@ -1696,7 +1816,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
           })
       })
 
-      if (cancelled) return
+      if (cancelled || !probesActiveRef.current) return
       timer = window.setTimeout(runDeviceProbeTick, schedulerTickMs(catchUp || due.length > 0))
     }
 
@@ -1705,9 +1825,10 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [getSchedule, objectsKey, setSnapshot])
+  }, [probesActive, getSchedule, objectsKey, setSnapshot])
 
   const refreshAllData = useCallback(async (): Promise<void> => {
+    if (!probesActiveRef.current) return
     if (!snapshotRef.current.objects.length || manualRefreshInFlightRef.current) return
 
     manualRefreshInFlightRef.current = true
@@ -1719,7 +1840,11 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
         if (!mountedRef.current) return
       }
 
-      snapshotRef.current.objects.forEach((object) => {
+      const objects = filterProbeObjects(
+        snapshotRef.current.objects,
+        lanActiveObjectIdRef.current
+      )
+      objects.forEach((object) => {
         const schedule = getSchedule(object.id)
         schedule.nextLinkAt = 0
         schedule.nextServerAt = 0
@@ -1728,7 +1853,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
 
       await refresh(true)
 
-      const onlineObjects = snapshotRef.current.objects.filter(
+      const onlineObjects = objects.filter(
         (object) =>
           isOnline(resultsRef.current[targetId(object.id, 'link')]) &&
           isOnline(resultsRef.current[targetId(object.id, 'server')])
@@ -1745,6 +1870,16 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
       if (mountedRef.current) setManualRefreshLoading(false)
     }
   }, [getSchedule, refresh, refreshMetricBlock])
+
+  const wasProbesActiveRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    const wasActive = wasProbesActiveRef.current
+    wasProbesActiveRef.current = probesActive
+    // Skip first mount — only animate on true resume after a pause.
+    if (!probesActive || wasActive !== false) return
+    if (!snapshotRef.current.objects.length) return
+    void refreshAllData()
+  }, [probesActive, refreshAllData])
 
   const clearObjectResults = useCallback(
     (id: string) => {
@@ -1836,6 +1971,7 @@ export function useMonitoringProbes({ snapshot, setSnapshot }: UseMonitoringProb
     serverChecking,
     manualRefreshLoading,
     uiClock,
+    lanActiveObjectId,
     refreshAllData,
     refreshMetricBlock,
     clearObjectResults

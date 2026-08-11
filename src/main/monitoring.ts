@@ -13,6 +13,7 @@ import type {
   MonitoringGuardDevice,
   MonitoringHttpResult,
   MonitoringHttpTarget,
+  MonitoringLanHints,
   MonitoringLocation,
   MonitoringLocationsResult,
   MonitoringMegaphone,
@@ -27,6 +28,7 @@ import type {
   MonitoringVersionRequest,
   MonitoringVersionResult
 } from '../shared/api'
+import { collectLanHints } from './monitoringNetwork'
 
 /** Per-reply wait; VPN RTT often 300–900ms with occasional drops. */
 const PING_TIMEOUT_MS = 5000
@@ -1650,6 +1652,10 @@ export function setupMonitoring(): void {
   ipcMain.handle('monitoring:http-probe', async (_, rawTargets: unknown): Promise<MonitoringHttpResult[]> => {
     const targets = normalizeHostTargets<MonitoringHttpTarget>(rawTargets)
     return mapPool(targets, HTTP_PROBE_CONCURRENCY, probeHttpTarget)
+  })
+
+  ipcMain.handle('monitoring:get-lan-hints', async (): Promise<MonitoringLanHints> => {
+    return collectLanHints()
   })
 
   ipcMain.handle(

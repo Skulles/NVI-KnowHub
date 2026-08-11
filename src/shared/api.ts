@@ -38,6 +38,12 @@ export interface MonitoringPingResult {
   error?: string
 }
 
+/** Local IPv4 addresses + gateways for LAN-vs-VPN detection. */
+export interface MonitoringLanHints {
+  localAddresses: string[]
+  gateways: string[]
+}
+
 /** HTTP probe target (OWL.Guard availability check). */
 export interface MonitoringHttpTarget {
   id: string
@@ -245,6 +251,7 @@ export interface ElectronAPI {
   winboxOpenDownloadPage(): Promise<{ ok: boolean }>
   monitoringPing(targets: MonitoringPingTarget[]): Promise<MonitoringPingResult[]>
   monitoringHttpProbe(targets: MonitoringHttpTarget[]): Promise<MonitoringHttpResult[]>
+  monitoringGetLanHints(): Promise<MonitoringLanHints>
   monitoringFetchVersion(request: MonitoringVersionRequest): Promise<MonitoringVersionResult>
   monitoringFetchServerResources(request: MonitoringAuthRequest): Promise<MonitoringServerResourcesResult>
   monitoringFetchStreams(request: MonitoringAuthRequest): Promise<MonitoringStreamsResult>

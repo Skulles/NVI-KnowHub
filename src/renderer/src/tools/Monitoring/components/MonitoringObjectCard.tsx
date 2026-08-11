@@ -80,16 +80,20 @@ function Card({
   title,
   children,
   action,
-  compact = false
+  compact = false,
+  muted = false
 }: {
   title: ReactNode
   children: ReactNode
   action?: ReactNode
   compact?: boolean
+  muted?: boolean
 }) {
   return (
     <section
-      className="group overflow-hidden rounded-2xl border border-surface-border bg-surface-card shadow-sheet"
+      className={`group overflow-hidden rounded-2xl border border-surface-border bg-surface-card shadow-sheet transition-opacity ${
+        muted ? 'opacity-55' : ''
+      }`}
     >
       <header
         className={`flex items-start justify-between gap-4 px-5 py-4 ${
@@ -741,7 +745,9 @@ function EndpointStatus({
   serverVersionError = null,
   metricsErrorDetail = null,
   rollingPacketLossPercent,
-  compact = false
+  compact = false,
+  titleBadge = null,
+  detailOverride = null
 }: {
   label: string
   host: string
@@ -763,10 +769,14 @@ function EndpointStatus({
   metricsErrorDetail?: string | null
   rollingPacketLossPercent?: number | null
   compact?: boolean
+  /** Extra label beside the title (e.g. LAN). */
+  titleBadge?: string | null
+  /** Replace the status/detail line under the title. */
+  detailOverride?: string | null
 }) {
   const status = result?.status ?? 'unknown'
   const linkLatencyMs =
-    kind === 'link' && !muted && status === 'online'
+    kind === 'link' && !muted && !detailOverride && status === 'online'
       ? (averageLatencyMs ?? result?.latencyMs ?? null)
       : null
   const showPing = linkLatencyMs !== null && linkLatencyMs !== undefined
@@ -778,20 +788,25 @@ function EndpointStatus({
     rollingPacketLossPercent === undefined ? latestPacketLossPercent : rollingPacketLossPercent
   const showUnstable =
     kind === 'link' &&
+    !detailOverride &&
     (result?.replyCount ?? 0) > 0 &&
     (unstable ||
       (packetLossPercent !== null && packetLossPercent >= SIGNIFICANT_PACKET_LOSS_PERCENT))
   const packetLossLabel =
     packetLossPercent !== null && packetLossPercent > 0 ? `${packetLossPercent}\u2009% потерь` : null
-  const serverNoReply = kind === 'server' && !muted && status === 'offline'
-  const owlGuardFailed = kind === 'server' && !muted && status === 'error'
-  const authOrVersionFailed = kind === 'server' && !muted && !!serverVersionError
+  // Blue "checking" only before the first successful online status — not on every refresh.
+  const serverCheckingPending =
+    kind === 'server' && checking && !muted && status !== 'online'
+  const serverNoReply = kind === 'server' && !muted && !serverCheckingPending && status === 'offline'
+  const owlGuardFailed = kind === 'server' && !muted && !serverCheckingPending && status === 'error'
+  const authOrVersionFailed =
+    kind === 'server' && !muted && !serverCheckingPending && !!serverVersionError
   // Unstable is styled only on its own subtitle fragment — icon/title/ping keep normal colors.
   const colorWarning =
     owlGuardFailed || authOrVersionFailed || (degraded && status === 'online')
   // Errors go under «Сервер» (same slot as load/temps); only a healthy version stays beside the title.
   const serverErrorDetail =
-    kind === 'server' && !muted
+    kind === 'server' && !muted && !serverCheckingPending
       ? serverNoReply
         ? 'нет ответа'
         : owlGuardFailed
@@ -813,35 +828,42 @@ function EndpointStatus({
     ? `${formatLatency(linkLatencyMs)}${packetLossLabel ? ` · ${packetLossLabel}` : ''}`
     : linkConnectionText(status, checking)
   const detail =
-    kind === 'link'
+    detailOverride ??
+    (kind === 'link'
       ? linkDetailBase
-      : serverErrorDetail
-        ? serverErrorDetail
-        : showResources
-          ? null
-          : host
-  const statusClass = muted
+      : serverCheckingPending
+        ? 'Попытка подключения…'
+        : serverErrorDetail
+          ? serverErrorDetail
+          : showResources
+            ? null
+            : host)
+  const statusClass = muted || detailOverride
     ? 'text-label-tertiary'
-    : colorWarning || serverNoReply
-      ? serverNoReply
-        ? statusClasses('offline', checking)
-        : 'text-amber-300'
-      : statusClasses(status, checking, degraded)
-  const detailClass = muted
+    : serverCheckingPending
+      ? 'text-tint-blue'
+      : colorWarning || serverNoReply
+        ? serverNoReply
+          ? statusClasses('offline', false)
+          : 'text-amber-300'
+        : statusClasses(status, checking, degraded)
+  const detailClass = muted || detailOverride
     ? 'text-label-tertiary'
-    : kind === 'link' && showPing
-      ? latencyTextClasses(linkLatencyMs)
-      : kind === 'link'
-        ? checking || status === 'unknown' || status === 'offline'
-          ? 'text-label-tertiary'
-          : colorWarning
-            ? 'text-amber-300'
-            : statusClass
-        : serverErrorDetail || serverNoReply
-          ? serverNoReply
-            ? statusClass
-            : 'text-amber-300'
-          : 'text-label-tertiary'
+    : serverCheckingPending
+      ? 'text-label-tertiary'
+      : kind === 'link' && showPing
+        ? latencyTextClasses(linkLatencyMs)
+        : kind === 'link'
+          ? checking || status === 'unknown' || status === 'offline'
+            ? 'text-label-tertiary'
+            : colorWarning
+              ? 'text-amber-300'
+              : statusClass
+          : serverErrorDetail || serverNoReply
+            ? serverNoReply
+              ? statusClass
+              : 'text-amber-300'
+            : 'text-label-tertiary'
   return (
     <div className="min-h-[2.5rem] min-w-0 overflow-hidden">
       <div className={`flex min-w-0 gap-3 ${compact ? 'items-center' : 'items-start'}`}>
@@ -851,6 +873,11 @@ function EndpointStatus({
         <div className={`min-w-0 flex-1 overflow-hidden ${compact ? '' : 'pt-0.5'}`}>
           <div className={`m-0 flex min-w-0 items-baseline gap-1.5 text-[14px] leading-5 font-medium ${statusClass}`}>
             <span className="truncate">{label}</span>
+            {titleBadge ? (
+              <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-tint-blue">
+                {titleBadge}
+              </span>
+            ) : null}
             {showUnstable && (
               <ScrollingLine
                 text={LINK_UNSTABLE}
@@ -872,7 +899,7 @@ function EndpointStatus({
             <ScrollingLine
               text={detail}
               className={`mt-0.5 text-[13px] leading-[1.125rem] ${
-                showPing ? `font-mono ${detailClass}` : detailClass
+                showPing && !detailOverride ? `font-mono ${detailClass}` : detailClass
               }`}
             />
           ) : (
@@ -904,7 +931,9 @@ export function MonitoringObjectCard({
   onEdit,
   onRefreshMetric,
   compact = false,
-  debug = false
+  debug = false,
+  probePaused = false,
+  lanActive = false
 }: {
   object: MonitoringObject
   results: ResultMap
@@ -927,6 +956,10 @@ export function MonitoringObjectCard({
   onRefreshMetric?: (object: MonitoringObject, kind: MonitoringMetricKind) => void
   compact?: boolean
   debug?: boolean
+  /** Paused while another object is monitored over LAN. */
+  probePaused?: boolean
+  /** This object is the active LAN connection. */
+  lanActive?: boolean
 }) {
   const linkResult = results[targetId(object.id, 'link')]
   const serverResult = results[targetId(object.id, 'server')]
@@ -935,34 +968,25 @@ export function MonitoringObjectCard({
   const serverOnline = linkOnline && isOnline(serverResult)
   const camerasTotal = object.camerasTotal ?? object.cameraStreams?.length ?? 0
   const hasCameraOnline = object.camerasOnline !== undefined
+  // Keep a spinner until the first successful value — avoid mixed "2/3" + "?" while retries wait.
   const awaitingFirstCameraPreview =
-    linkOnline && serverOnline && camerasTotal > 0 && !hasCameraOnline && camerasPreviewLoading
-  const camerasFailed =
-    linkOnline &&
-    serverOnline &&
-    camerasTotal > 0 &&
-    !hasCameraOnline &&
-    !camerasPreviewLoading &&
-    camerasMetricFailed
+    linkOnline && serverOnline && !probePaused && camerasTotal > 0 && !hasCameraOnline
   const megaphonesTotal = object.megaphonesTotal ?? object.megaphones?.length ?? 0
   const hasMegaphoneOnline = object.megaphonesOnline !== undefined
   const awaitingFirstMegaphoneStatus =
-    linkOnline && serverOnline && megaphonesTotal > 0 && !hasMegaphoneOnline && megaphonesStatusLoading
-  const megaphonesFailed =
-    linkOnline &&
-    serverOnline &&
-    megaphonesTotal > 0 &&
-    !hasMegaphoneOnline &&
-    !megaphonesStatusLoading &&
-    megaphonesMetricFailed
+    linkOnline && serverOnline && !probePaused && megaphonesTotal > 0 && !hasMegaphoneOnline
   const metricsDegraded =
-    serverOnline && (camerasFailed || megaphonesFailed || Boolean(serverVersionError))
+    serverOnline &&
+    !probePaused &&
+    ((camerasMetricFailed && hasCameraOnline) ||
+      (megaphonesMetricFailed && hasMegaphoneOnline) ||
+      Boolean(serverVersionError))
   const metricsErrorDetail =
-    camerasFailed && megaphonesFailed
+    camerasMetricFailed && hasCameraOnline && megaphonesMetricFailed && hasMegaphoneOnline
       ? 'не удалось получить данные камер и рупоров'
-      : camerasFailed
+      : camerasMetricFailed && hasCameraOnline
         ? 'не удалось получить данные камер'
-        : megaphonesFailed
+        : megaphonesMetricFailed && hasMegaphoneOnline
           ? 'не удалось получить данные рупоров'
           : null
   const cameraStreams = object.cameraStreams
@@ -998,12 +1022,20 @@ export function MonitoringObjectCard({
     serverOnline && guardDevices !== undefined
       ? formatGuardDevicesTooltip(guardDevices, devicesOnlineIdsForTooltip)
       : null
-  const resolvedSensorsStatus = resolveSensorsIndicatorStatus(
-    guardDevices,
-    object.devicesOnline,
-    linkOnline,
-    serverOnline
-  )
+  const sensorsPending =
+    linkOnline &&
+    serverOnline &&
+    !probePaused &&
+    (guardDevices === undefined ||
+      (guardDevices.length > 0 && object.devicesOnline === undefined))
+  const resolvedSensorsStatus = sensorsPending
+    ? 'unknown'
+    : resolveSensorsIndicatorStatus(
+        guardDevices,
+        object.devicesOnline,
+        linkOnline,
+        serverOnline
+      )
   const sensorsDeviceLabels = listSensorsDeviceLabels(
     guardDevices,
     devicesOnlineIdsForTooltip,
@@ -1016,6 +1048,7 @@ export function MonitoringObjectCard({
   return (
     <Card
       compact={compact}
+      muted={probePaused}
       title={
         <span className={`flex min-w-0 ${compact ? 'items-center gap-2' : 'flex-col gap-0.5'}`}>
           <span className="flex min-w-0 items-center gap-2">
@@ -1080,6 +1113,8 @@ export function MonitoringObjectCard({
             averageLatencyMs={linkAverageLatencyMs}
             rollingPacketLossPercent={linkPacketLossPercent}
             unstable={linkUnstable}
+            titleBadge={lanActive ? '[ LAN ]' : null}
+            detailOverride={probePaused ? 'пауза' : null}
           />
           <EndpointStatus
             label="Сервер"
@@ -1087,12 +1122,12 @@ export function MonitoringObjectCard({
             result={serverResult}
             checking={checkingServer}
             kind="server"
-            muted={!linkOnline}
+            muted={!linkOnline || probePaused}
             degraded={metricsDegraded}
-            serverResources={serverOnline ? serverResources : null}
+            serverResources={serverOnline && !probePaused ? serverResources : null}
             serverResourcesNow={now}
-            serverVersion={serverOnline ? serverVersion : null}
-            serverVersionError={linkOnline ? serverVersionError : null}
+            serverVersion={serverOnline && !probePaused ? serverVersion : null}
+            serverVersionError={linkOnline && !probePaused ? serverVersionError : null}
             metricsErrorDetail={metricsErrorDetail}
             compact={compact}
           />
@@ -1117,10 +1152,10 @@ export function MonitoringObjectCard({
               online={hasCameraOnline ? object.camerasOnline! : null}
               total={camerasTotal}
               icon={<CamerasIcon />}
-              muted={!serverOnline && !awaitingFirstCameraPreview}
-              onlineUnknown={!serverOnline || (!hasCameraOnline && !awaitingFirstCameraPreview && !camerasFailed)}
+              muted={!serverOnline}
+              onlineUnknown={!serverOnline}
               loading={awaitingFirstCameraPreview}
-              failed={camerasFailed}
+              failed={false}
               hoverTooltip={camerasHoverTooltip}
               onRefresh={onRefreshMetric ? () => onRefreshMetric(object, 'cameras') : undefined}
               refreshing={camerasPreviewLoading}
@@ -1130,12 +1165,10 @@ export function MonitoringObjectCard({
               online={hasMegaphoneOnline ? object.megaphonesOnline! : null}
               total={megaphonesTotal}
               icon={<HornsIcon />}
-              muted={!serverOnline && !awaitingFirstMegaphoneStatus}
-              onlineUnknown={
-                !serverOnline || (!hasMegaphoneOnline && !awaitingFirstMegaphoneStatus && !megaphonesFailed)
-              }
+              muted={!serverOnline}
+              onlineUnknown={!serverOnline}
               loading={awaitingFirstMegaphoneStatus}
-              failed={megaphonesFailed}
+              failed={false}
               hoverTooltip={megaphonesHoverTooltip}
               onRefresh={onRefreshMetric ? () => onRefreshMetric(object, 'megaphones') : undefined}
               refreshing={megaphonesStatusLoading}
@@ -1145,6 +1178,7 @@ export function MonitoringObjectCard({
               status={resolvedSensorsStatus}
               icon={<SensorsIcon />}
               now={now}
+              loading={sensorsPending}
               hoverTooltip={sensorsHoverTooltip}
               onRefresh={onRefreshMetric ? () => onRefreshMetric(object, 'sensors') : undefined}
               refreshing={sensorsRefreshLoading}
@@ -1245,14 +1279,14 @@ export function MonitoringDebugObjectCard({ now, compact = false }: { now: numbe
   const serverId = targetId(object.id, 'server')
   const results: ResultMap = {
     [linkId]: {
-      ...mockPingResult(linkId, object.linkHost, 'online', 28),
-      replyCount: 3,
+      ...mockPingResult(linkId, object.linkHost, 'online', 2),
+      replyCount: 4,
       sentCount: 4
     },
-    [serverId]: mockPingResult(serverId, object.serverHost, 'online', 41)
+    [serverId]: mockPingResult(serverId, object.serverHost, 'online', 3)
   }
   const latencyHistory: LatencyHistoryMap = {
-    [linkId]: [24, 28, 31, 27, 29]
+    [linkId]: [2, 3, 2, 4, 3]
   }
   const serverResources: ServerResourceStubs = {
     cpuLoad: 48,
@@ -1268,8 +1302,8 @@ export function MonitoringDebugObjectCard({ now, compact = false }: { now: numbe
       object={object}
       results={results}
       latencyHistory={latencyHistory}
-      linkPacketLossPercent={25}
-      linkUnstable
+      linkPacketLossPercent={0}
+      linkUnstable={false}
       checkingLink={false}
       checkingServer={false}
       serverVersion={object.serverVersion ?? null}
@@ -1282,6 +1316,7 @@ export function MonitoringDebugObjectCard({ now, compact = false }: { now: numbe
       now={now}
       compact={compact}
       debug
+      lanActive
     />
   )
 }

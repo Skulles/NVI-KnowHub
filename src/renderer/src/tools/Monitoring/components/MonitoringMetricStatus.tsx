@@ -406,6 +406,7 @@ export function MonitoringIndicatorStatus({
   status,
   icon,
   now,
+  loading = false,
   hoverTooltip = null,
   onRefresh,
   refreshing = false
@@ -414,6 +415,7 @@ export function MonitoringIndicatorStatus({
   status: SensorIndicatorStatus
   icon: ReactNode
   now: number
+  loading?: boolean
   hoverTooltip?: ReactNode
   onRefresh?: () => void
   refreshing?: boolean
@@ -421,11 +423,11 @@ export function MonitoringIndicatorStatus({
   const rootRef = useRef<HTMLDivElement>(null)
   const hideTimerRef = useRef<number | undefined>(undefined)
   const [hovered, setHovered] = useState(false)
-  const iconStatusClass = sensorStatusClass(status)
+  const iconStatusClass = loading ? 'text-label-tertiary' : sensorStatusClass(status)
   const activeIndex =
     entries.length > 0 ? Math.floor(now / RESOURCE_METRIC_FLIP_MS) % entries.length : 0
   const activeEntry = entries[activeIndex]
-  const ariaLabel = activeEntry?.label || 'Датчики'
+  const ariaLabel = loading ? 'Датчики: загрузка' : activeEntry?.label || 'Датчики'
 
   const openTooltip = (): void => {
     if (!hoverTooltip) return
@@ -466,7 +468,7 @@ export function MonitoringIndicatorStatus({
         {icon}
       </span>
       <span className="m-0 flex h-5 min-w-0 items-center justify-center font-mono text-[12px] font-semibold leading-5 tracking-tight">
-        <FlippingSensorLabels entries={entries} now={now} />
+        {loading ? <MetricCountSpinner /> : <FlippingSensorLabels entries={entries} now={now} />}
       </span>
       {hovered && hoverTooltip ? (
         <MetricHoverTooltip

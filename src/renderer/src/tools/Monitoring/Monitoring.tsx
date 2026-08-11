@@ -64,10 +64,11 @@ const EMPTY_SERVER_RESOURCES: ServerResourceStubs = {
 
 /** Temporary sample card for the new layout — remove after QA. */
 const SHOW_MONITORING_DEBUG_CARD = false
+const DEBUG_LAN_OBJECT_CODE = 'owl9999'
 
 const MONITORING_VIEW_MODE_KEY = 'monitoring-view-mode'
 
-export function Monitoring() {
+export function Monitoring({ screenActive = true }: { screenActive?: boolean }) {
   const [snapshot, setSnapshot] = useState(() => {
     const loaded = loadMonitoringSnapshot()
     return { objects: loaded.objects.map(clearCachedMetricCounts) }
@@ -103,8 +104,22 @@ export function Monitoring() {
     uiClock,
     refreshAllData,
     refreshMetricBlock,
-    clearObjectResults
-  } = useMonitoringProbes({ snapshot, setSnapshot })
+    clearObjectResults,
+    lanActiveObjectId
+  } = useMonitoringProbes({ snapshot, setSnapshot, screenActive })
+
+  const lanActiveObject = useMemo(
+    () =>
+      lanActiveObjectId
+        ? snapshot.objects.find((object) => object.id === lanActiveObjectId) ?? null
+        : null,
+    [lanActiveObjectId, snapshot.objects]
+  )
+  const lanBannerCode = SHOW_MONITORING_DEBUG_CARD
+    ? DEBUG_LAN_OBJECT_CODE
+    : lanActiveObject
+      ? lanActiveObject.code.replace(/\/$/, '')
+      : null
 
   useEffect(() => {
     try {
@@ -119,10 +134,14 @@ export function Monitoring() {
     [editor, snapshot.objects]
   )
 
-  const sortedObjects = useMemo(
-    () => [...snapshot.objects].sort(compareMonitoringObjectsByDigits),
-    [snapshot.objects]
-  )
+  const sortedObjects = useMemo(() => {
+    const sorted = [...snapshot.objects].sort(compareMonitoringObjectsByDigits)
+    if (!lanActiveObjectId) return sorted
+    const activeIndex = sorted.findIndex((object) => object.id === lanActiveObjectId)
+    if (activeIndex <= 0) return sorted
+    const [active] = sorted.splice(activeIndex, 1)
+    return [active, ...sorted]
+  }, [lanActiveObjectId, snapshot.objects])
 
   useEffect(() => {
     saveMonitoringSnapshot(snapshot)
@@ -237,7 +256,9 @@ export function Monitoring() {
           </button>
         </div>
         <p className="text-[14px] leading-relaxed text-label-secondary">
-          Для работы инструмента необходимо подключиться к VPN.
+          {lanBannerCode
+            ? `Локальное подключение к ${lanBannerCode}. Мониторинг остальных объектов на паузе`
+            : 'Для работы инструмента необходимо подключиться к VPN'}
         </p>
       </header>
 
@@ -329,7 +350,16 @@ export function Monitoring() {
             sensorsRefreshLoading={Boolean(sensorsRefreshLoading[object.id])}
             now={uiClock}
             onEdit={openEditEditor}
-            onRefreshMetric={refreshMetricBlock}
+            onRefreshMetric={
+              SHOW_MONITORING_DEBUG_CARD || (lanActiveObjectId && lanActiveObjectId !== object.id)
+                ? undefined
+                : refreshMetricBlock
+            }
+            probePaused={
+              SHOW_MONITORING_DEBUG_CARD ||
+              Boolean(lanActiveObjectId && lanActiveObjectId !== object.id)
+            }
+            lanActive={!SHOW_MONITORING_DEBUG_CARD && lanActiveObjectId === object.id}
             compact={viewMode === 'table'}
           />
         ))}

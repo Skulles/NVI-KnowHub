@@ -1,9 +1,10 @@
-import React, { useMemo, useRef, useLayoutEffect } from 'react'
+import React, { useEffect, useMemo, useRef, useLayoutEffect, useState } from 'react'
 import { attachArticleCodeCopyButtons } from '../../lib/article-code-copy'
 import { sanitizeArticleHtml } from '../../lib/sanitize-article-html'
 import { attachArticleCodeHints } from '../../lib/article-code-hints'
 import { useContentStore } from '../../store/content'
 import { getToolComponent } from '../../tools/registry'
+import { Monitoring } from '../../tools/Monitoring/Monitoring'
 import { ArticleToc, TocNav, articleHasToc, splitBodyAtFirstHeading } from './TableOfContents'
 
 function parseArticleHtml(html: string): { leadInner: string | undefined; bodyHtml: string } {
@@ -281,6 +282,20 @@ export function ContentArea(): React.ReactElement {
   const { selectedItem, articleHtml, loading } = useContentStore()
   const scrollRootRef = useRef<HTMLElement>(null)
   const selectionKey = selectedItem?.id ?? null
+  const monitoringSelected =
+    !loading && selectedItem?.type === 'tool' && selectedItem.toolId === 'monitoring'
+  const otherToolId =
+    !loading &&
+    selectedItem?.type === 'tool' &&
+    selectedItem.toolId &&
+    selectedItem.toolId !== 'monitoring'
+      ? selectedItem.toolId
+      : null
+  const [monitoringKeepAlive, setMonitoringKeepAlive] = useState(false)
+
+  useEffect(() => {
+    if (monitoringSelected) setMonitoringKeepAlive(true)
+  }, [monitoringSelected])
 
   useLayoutEffect(() => {
     const root = scrollRootRef.current
@@ -319,9 +334,16 @@ export function ContentArea(): React.ReactElement {
           <ArticleDocument html={articleHtml} title={selectedItem.title} />
         )}
 
-        {!loading && selectedItem?.type === 'tool' && selectedItem.toolId && (
-          <ToolView toolId={selectedItem.toolId} />
+        {monitoringKeepAlive && (
+          <div
+            className={monitoringSelected ? 'tool-view' : 'hidden'}
+            aria-hidden={!monitoringSelected}
+          >
+            <Monitoring screenActive={monitoringSelected} />
+          </div>
         )}
+
+        {otherToolId && <ToolView toolId={otherToolId} />}
       </div>
     </main>
   )
