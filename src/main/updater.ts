@@ -64,9 +64,15 @@ export function setupUpdater(window: BrowserWindow): void {
 
     ipcMain.handle('app:install-update', () => {
       quittingForUpdate = true
-      setImmediate(() => {
-        autoUpdater.quitAndInstall(false, true)
-      })
+      // Закрываем окна до spawn NSIS, чтобы раньше отпустить file locks.
+      // Silent (/S): без диалога «приложение открыто»; force-run — перезапуск после установки.
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.removeAllListeners('close')
+        if (!win.isDestroyed()) win.close()
+      }
+      setTimeout(() => {
+        autoUpdater.quitAndInstall(true, true)
+      }, 300)
       return { ok: true as const }
     })
 

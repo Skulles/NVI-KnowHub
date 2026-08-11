@@ -105,9 +105,12 @@ module.exports = {
     ]
   },
   nsis: {
+    include: 'build/installer.nsh',
     installerIcon: 'build/icon.ico',
     uninstallerIcon: 'build/icon.ico',
+    installerHeaderIcon: 'build/icon.ico',
     createDesktopShortcut: 'always',
+    createStartMenuShortcut: true,
     shortcutName: 'NVI KnowHub'
   },
   mac: {
