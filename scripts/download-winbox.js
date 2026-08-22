@@ -4,9 +4,9 @@
 //   node scripts/download-winbox.js
 //   WINBOX_DOWNLOAD_VERSION=4.3 node scripts/download-winbox.js   # pin, skip live lookup
 
-const { mkdirSync, createWriteStream, mkdtempSync, rmSync, writeFileSync } = require('fs')
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs')
 const { tmpdir } = require('os')
-const { join, dirname } = require('path')
+const { join } = require('path')
 const https = require('https')
 const AdmZip = require('adm-zip')
 
@@ -14,50 +14,115 @@ const OUT_DIR = join(__dirname, '..', 'resources', 'winbox')
 const WINBOX_PAGE = 'https://mikrotik.com/download/winbox'
 const WINBOX_CDN_BASE = 'https://download.mikrotik.com/routeros/winbox'
 const FALLBACK_VERSIONS = ['4.3', '4.2', '4.1']
+const BINARY_IDLE_MS = 45_000
+const BINARY_TOTAL_MS = 300_000
+const MAX_REDIRECTS = 5
+const MAX_ATTEMPTS = 3
 const BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 }
+const BINARY_HEADERS = {
+  Accept: '*/*',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+}
 
-function httpsGet(url, headers = {}) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function downloadBuffer(url, headers, { idleMs = 15_000, totalMs = 30_000 } = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { timeout: 60000, headers }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        const next = new URL(res.headers.location, url).toString()
-        return httpsGet(next, headers).then(resolve, reject)
+    let settled = false
+    const finish = (err, value) => {
+      if (settled) return
+      settled = true
+      if (err) reject(err)
+      else resolve(value)
+    }
+
+    const get = (current, hops) => {
+      if (hops > MAX_REDIRECTS) {
+        finish(new Error(`Too many redirects for ${url}`))
+        return
       }
-      if (res.statusCode !== 200) {
-        res.resume()
-        return reject(new Error(`HTTP ${res.statusCode} for ${url}`))
-      }
-      resolve(res)
-    })
-    req.on('error', reject)
-    req.on('timeout', () => { req.destroy(); reject(new Error(`Timeout fetching ${url}`)) })
+
+      const req = https.get(current, { headers }, (res) => {
+        const location = res.headers.location
+        if (res.statusCode >= 300 && res.statusCode < 400 && location) {
+          res.resume()
+          get(new URL(location, current).toString(), hops + 1)
+          return
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          finish(new Error(`HTTP ${res.statusCode} for ${current}`))
+          return
+        }
+
+        const chunks = []
+        let idle = setTimeout(() => req.destroy(new Error('IDLE')), idleMs)
+        res.on('data', (chunk) => {
+          chunks.push(chunk)
+          clearTimeout(idle)
+          idle = setTimeout(() => req.destroy(new Error('IDLE')), idleMs)
+        })
+        res.on('end', () => {
+          clearTimeout(idle)
+          finish(null, Buffer.concat(chunks))
+        })
+        res.on('error', (err) => {
+          clearTimeout(idle)
+          finish(err)
+        })
+      })
+
+      req.setTimeout(totalMs, () => req.destroy(new Error('TIMEOUT')))
+      req.on('error', (err) => finish(err))
+    }
+
+    get(url, 0)
   })
 }
 
 async function downloadText(url) {
-  const res = await httpsGet(url, BROWSER_HEADERS)
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    res.on('data', (d) => chunks.push(d))
-    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-    res.on('error', reject)
-  })
+  const buf = await downloadBuffer(url, BROWSER_HEADERS)
+  return buf.toString('utf8')
 }
 
-async function downloadFile(url, dest) {
-  const res = await httpsGet(url)
-  mkdirSync(dirname(dest), { recursive: true })
-  return new Promise((resolve, reject) => {
-    const file = createWriteStream(dest)
-    res.pipe(file)
-    file.on('finish', () => file.close(resolve))
-    file.on('error', reject)
-    res.on('error', reject)
-  })
+function isTransientDownloadError(err) {
+  const message = String(err?.message || err)
+  const code = err?.code
+  return (
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EPIPE' ||
+    code === 'ECONNABORTED' ||
+    /aborted|socket hang up|IDLE|TIMEOUT/i.test(message)
+  )
+}
+
+async function downloadFileWithRetry(url) {
+  let lastError
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      if (attempt > 1) console.log(`  Retry ${attempt}/${MAX_ATTEMPTS}…`)
+      const buf = await downloadBuffer(url, BINARY_HEADERS, {
+        idleMs: BINARY_IDLE_MS,
+        totalMs: BINARY_TOTAL_MS
+      })
+      if (!buf || buf.length === 0) throw new Error('Empty response')
+      return buf
+    } catch (err) {
+      lastError = err
+      console.warn(`  Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`)
+      if (!isTransientDownloadError(err) || attempt === MAX_ATTEMPTS) break
+      await sleep(1500 * attempt)
+    }
+  }
+  throw lastError
 }
 
 function decodeHtml(html) {
@@ -88,7 +153,7 @@ async function resolveVersions() {
     const version = parseWinboxVersionFromPage(html)
     if (version) {
       console.log(`  MikroTik reports WinBox ${version}`)
-      return [version]
+      return [version, ...FALLBACK_VERSIONS.filter((item) => item !== version)]
     }
     console.warn('  Could not parse version from the download page')
   } catch (err) {
@@ -114,27 +179,28 @@ function pickWindowsExe(zip) {
 async function main() {
   const versions = await resolveVersions()
   const tmpDir = mkdtempSync(join(tmpdir(), 'knowhub-winbox-'))
-  const zipPath = join(tmpDir, 'WinBox_Windows.zip')
 
   try {
-    let downloaded = false
+    let zipBuf = null
+    const tried = []
     for (const version of versions) {
       const url = `${WINBOX_CDN_BASE}/${version}/WinBox_Windows.zip`
+      tried.push(version)
       console.log(`WinBox ZIP (version ${version}): ${url}`)
       try {
         console.log('  Downloading archive…')
-        await downloadFile(url, zipPath)
-        downloaded = true
+        zipBuf = await downloadFileWithRetry(url)
+        console.log(`  Downloaded ${(zipBuf.length / 1024 / 1024).toFixed(1)} MB`)
         break
       } catch (err) {
         console.warn(`  ${version} failed: ${err.message}`)
       }
     }
-    if (!downloaded) {
-      throw new Error(`Could not download WinBox_Windows.zip (tried ${versions.join(', ')})`)
+    if (!zipBuf) {
+      throw new Error(`Could not download WinBox_Windows.zip (tried ${tried.join(', ')})`)
     }
 
-    const zip = new AdmZip(zipPath)
+    const zip = new AdmZip(zipBuf)
     const entry = pickWindowsExe(zip)
     if (!entry) {
       throw new Error('No WinBox.exe or winbox64.exe found inside WinBox_Windows.zip')
