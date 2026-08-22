@@ -12,6 +12,7 @@ import { logger } from './logger'
 
 const FETCH_TIMEOUT_MS = 30_000
 const MAX_RESPONSE_BYTES = 15 * 1024 * 1024
+const CONTENT_DOWNLOAD_CONCURRENCY = 6
 
 function serverUrl(): string | null {
   const raw = process.env['KNOWHUB_SERVER_URL']?.trim()
@@ -143,6 +144,19 @@ function fetchWithLimit(url: string, asJson: boolean): Promise<unknown> {
   })
 }
 
+async function mapPool<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
+  if (items.length === 0) return
+  let next = 0
+  const run = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next
+      next += 1
+      await worker(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()))
+}
+
 function mergeManifests(local: ContentManifest, remote: ContentManifest): ContentManifest {
   const remoteSectionIds = new Set(remote.sections.map((s) => s.id))
   const localOnlySections = local.sections.filter((s) => !remoteSectionIds.has(s.id))
@@ -192,13 +206,13 @@ async function syncContent(window: BrowserWindow): Promise<void> {
 
   let downloadFailures = 0
 
-  for (const item of toDownload) {
-    if (!item.htmlFile) continue
+  await mapPool(toDownload, CONTENT_DOWNLOAD_CONCURRENCY, async (item) => {
+    if (!item.htmlFile) return
     const dest = safeHtmlPath(item.htmlFile)
     if (!dest) {
       logger.warn(`Content sync: rejected unsafe htmlFile ${item.htmlFile}`)
       downloadFailures += 1
-      continue
+      return
     }
     try {
       const html = await fetchWithLimit(`${baseUrl}/content/${item.htmlFile}`, false)
@@ -209,7 +223,7 @@ async function syncContent(window: BrowserWindow): Promise<void> {
       downloadFailures += 1
       logger.error(`Content sync: failed to download ${item.htmlFile}`, e)
     }
-  }
+  })
 
   if (downloadFailures > 0) {
     logger.warn(`Content sync: skipped manifest update after ${downloadFailures} download failure(s)`)

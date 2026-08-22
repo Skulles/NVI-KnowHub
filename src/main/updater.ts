@@ -5,6 +5,7 @@
 import { autoUpdater } from 'electron-updater'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { logger } from './logger'
+import { installParallelUpdateDownloader } from './parallelDownload'
 
 let quittingForUpdate = false
 let targetWindow: BrowserWindow | null = null
@@ -27,6 +28,11 @@ export function setupUpdater(window: BrowserWindow): void {
 
   if (!ipcRegistered) {
     ipcRegistered = true
+
+    const executor = (
+      autoUpdater as unknown as { httpExecutor?: Parameters<typeof installParallelUpdateDownloader>[0] }
+    ).httpExecutor
+    if (executor) installParallelUpdateDownloader(executor)
 
     // Скачивание стартует по кнопке «Обновить» (или тихо при «Позже»).
     autoUpdater.autoDownload = false
