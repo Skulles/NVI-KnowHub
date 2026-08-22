@@ -12,7 +12,6 @@ export function useWinboxLauncher() {
     hasUpdate,
     latestVersion,
     sidebarOpenError,
-    bundledExpectedName,
     setChecking,
     setLocalStatus,
     setResult,
@@ -27,7 +26,7 @@ export function useWinboxLauncher() {
   /** 'install' | 'update' — чтобы подпись кнопки отличала первую загрузку от обновления. */
   const [downloadKind, setDownloadKind] = useState<DownloadKind | null>(null)
 
-  const expectedName = bundledExpectedName || 'WinBox'
+  const expectedName = 'WinBox'
 
   const refreshWinboxInfo = useCallback(async () => {
     if (!window.api) return
@@ -51,7 +50,10 @@ export function useWinboxLauncher() {
   // Быстрый локальный статус — кнопка не ждёт mikrotik.com.
   useEffect(() => {
     if (localReady || !window.api) return
-    void window.api.winboxGetLocalStatus().then(setLocalStatus)
+    void window.api
+      .winboxGetLocalStatus()
+      .then(setLocalStatus)
+      .catch(() => setLocalStatus({ bundled: false, bundledExpectedName: 'WinBox' }))
   }, [localReady, setLocalStatus])
 
   // Проверка обновлений в фоне. Результат пишем в zustand даже после unmount,
@@ -84,17 +86,24 @@ export function useWinboxLauncher() {
       setSidebarOpenError(null)
       setDownloadKind(kind)
       setDownloading(true)
-      const result = await window.api.winboxDownloadBundled()
-      setDownloading(false)
-      setDownloadKind(null)
-      if (!result.ok) {
+      try {
+        const result = await window.api.winboxDownloadBundled()
+        if (!result.ok) {
+          setDownloadError(
+            result.error ??
+              (kind === 'update' ? 'Не удалось обновить WinBox.' : 'Не удалось загрузить WinBox.'),
+          )
+          return
+        }
+        await refreshWinboxInfo()
+      } catch {
         setDownloadError(
-          result.error ??
-            (kind === 'update' ? 'Не удалось обновить WinBox.' : 'Не удалось загрузить WinBox.'),
+          kind === 'update' ? 'Не удалось обновить WinBox.' : 'Не удалось загрузить WinBox.',
         )
-        return
+      } finally {
+        setDownloading(false)
+        setDownloadKind(null)
       }
-      await refreshWinboxInfo()
     },
     [refreshWinboxInfo, setSidebarOpenError],
   )
@@ -111,21 +120,30 @@ export function useWinboxLauncher() {
     }
 
     setLaunching(true)
-    const result = await window.api.winboxOpen()
-    setLaunching(false)
-    const name = useWinboxStore.getState().bundledExpectedName || 'WinBox'
-    if (!result.ok) {
-      setOpenError(
-        result.error === 'not-bundled'
-          ? `${name} не найден в ресурсах приложения.`
-          : `Не удалось запустить WinBox: ${result.error}`,
-      )
+    try {
+      const result = await window.api.winboxOpen()
+      if (!result.ok) {
+        setOpenError(
+          result.error === 'not-bundled'
+            ? 'WinBox не найден. Нажмите «Загрузить» или скачайте его с сайта MikroTik.'
+            : `Не удалось запустить WinBox: ${result.error}`,
+        )
+      }
+    } catch {
+      setOpenError('Не удалось запустить WinBox.')
+    } finally {
+      setLaunching(false)
     }
   }, [bundled, localReady, runDownload, setSidebarOpenError])
 
   const handleUpdate = useCallback(() => {
     void runDownload('update')
   }, [runDownload])
+
+  const handleOpenDownloadPage = useCallback(() => {
+    if (!window.api) return
+    void window.api.winboxOpenDownloadPage()
+  }, [])
 
   // Не блокируем кнопку ожиданием сети (winboxCheckUpdate → mikrotik.com).
   const busy = launching || downloading
@@ -168,6 +186,7 @@ export function useWinboxLauncher() {
     actions: {
       primary: handlePrimaryAction,
       update: handleUpdate,
+      openDownloadPage: handleOpenDownloadPage,
     },
   }
 }

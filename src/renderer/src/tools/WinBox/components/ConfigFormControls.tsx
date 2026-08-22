@@ -5,7 +5,7 @@ import type {
   GrooveaWirelessProtocol,
   WirelessStack,
 } from "../winboxConfigTypes";
-import { NRAY_W60G_FREQUENCY } from "../routeros/wirelessLinkConfig";
+import { buildWirelessLinkNote } from "../routeros/wirelessLinkConfig";
 
 export const CONFIG_APPLY_INSTRUCTION =
   "Вставьте команды в терминал устройства (можно все сразу), предварительно выполнив на нём сброс без настроек по умолчанию";
@@ -248,6 +248,12 @@ const WIRELESS_BAND_TOOLTIPS: Partial<Record<GrooveaWirelessBand, string>> = {
   "5 ГГц": "Меньший радиус, выше скорость",
 };
 
+function WirelessLinkNote({ text }: { text: string }) {
+  return (
+    <p className="m-0 text-[13px] leading-relaxed text-label-tertiary">{text}</p>
+  );
+}
+
 export function GrooveaWirelessSettings({
   wirelessStack,
   protocol,
@@ -261,63 +267,66 @@ export function GrooveaWirelessSettings({
   onProtocolChange: (value: GrooveaWirelessProtocol) => void;
   onBandChange: (value: GrooveaWirelessBand) => void;
 }) {
+  const note = buildWirelessLinkNote(wirelessStack, protocol, band);
+
   if (wirelessStack === "w60g") {
-    return (
-      <p className="m-0 text-[13px] leading-relaxed text-label-tertiary">
-        PtP-линк 60&nbsp;ГГц (W60G): канал {NRAY_W60G_FREQUENCY}{" "}
-        (58.32&nbsp;ГГц), регион EU.
-      </p>
-    );
+    return <WirelessLinkNote text={note} />;
   }
 
   if (wirelessStack === "wifi") {
     return (
-      <div className="flex items-center gap-3">
-        <FieldLabel>Диапазон</FieldLabel>
-        <SegmentToggle
-          value={band}
-          onChange={onBandChange}
-          options={["2.4 ГГц", "5 ГГц"]}
-          tooltips={WIRELESS_BAND_TOOLTIPS}
-          ariaLabel="Диапазон беспроводной связи"
-        />
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <FieldLabel>Диапазон</FieldLabel>
+          <SegmentToggle
+            value={band}
+            onChange={onBandChange}
+            options={["2.4 ГГц", "5 ГГц"]}
+            tooltips={WIRELESS_BAND_TOOLTIPS}
+            ariaLabel="Диапазон беспроводной связи"
+          />
+        </div>
+        <WirelessLinkNote text={note} />
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3">
-      <FieldLabel>Протокол</FieldLabel>
-      <SegmentToggle
-        value={protocol}
-        onChange={onProtocolChange}
-        options={["nv2", "802.11"]}
-        tooltips={WIRELESS_PROTOCOL_TOOLTIPS}
-        ariaLabel="Протокол беспроводной связи"
-      />
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <FieldLabel>Протокол</FieldLabel>
+        <SegmentToggle
+          value={protocol}
+          onChange={onProtocolChange}
+          options={["nv2", "802.11"]}
+          tooltips={WIRELESS_PROTOCOL_TOOLTIPS}
+          ariaLabel="Протокол беспроводной связи"
+        />
 
-      <div
-        className={`grid transition-[grid-template-columns] duration-200 ease-out ${
-          protocol === "802.11" ? "grid-cols-[1fr]" : "grid-cols-[0fr]"
-        }`}
-      >
-        <div className="min-w-0 overflow-hidden">
-          <div className="flex items-center gap-3 pl-3">
-            <span
-              className="h-5 w-px shrink-0 rounded-full bg-surface-border"
-              aria-hidden
-            />
-            <FieldLabel>Диапазон</FieldLabel>
-            <SegmentToggle
-              value={band}
-              onChange={onBandChange}
-              options={["2.4 ГГц", "5 ГГц"]}
-              tooltips={WIRELESS_BAND_TOOLTIPS}
-              ariaLabel="Диапазон беспроводной связи"
-            />
+        <div
+          className={`grid transition-[grid-template-columns] duration-200 ease-out ${
+            protocol === "802.11" ? "grid-cols-[1fr]" : "grid-cols-[0fr]"
+          }`}
+        >
+          <div className="min-w-0 overflow-hidden">
+            <div className="flex items-center gap-3 pl-3">
+              <span
+                className="h-5 w-px shrink-0 rounded-full bg-surface-border"
+                aria-hidden
+              />
+              <FieldLabel>Диапазон</FieldLabel>
+              <SegmentToggle
+                value={band}
+                onChange={onBandChange}
+                options={["2.4 ГГц", "5 ГГц"]}
+                tooltips={WIRELESS_BAND_TOOLTIPS}
+                ariaLabel="Диапазон беспроводной связи"
+              />
+            </div>
           </div>
         </div>
       </div>
+      <WirelessLinkNote text={note} />
     </div>
   );
 }

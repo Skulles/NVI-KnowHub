@@ -16,11 +16,26 @@ import {
   renameSync
 } from 'fs'
 import { execFileSync, spawn } from 'child_process'
+import https from 'https'
 import { tmpdir } from 'os'
 import { join, resolve, sep, isAbsolute, relative } from 'path'
+import { URL } from 'url'
 import AdmZip from 'adm-zip'
 import type { IZipEntry } from 'adm-zip'
 import type { WinboxUpdateInfo } from '../shared/api'
+import { logger } from './logger'
+import {
+  WINBOX_DOWNLOAD_URL,
+  bundledCandidateNames,
+  getBundledExpectedName,
+  parseWinboxArtifactNamesFromPage,
+  parseWinboxVersionFromPage,
+  pickWindowsExeBasename,
+  winboxCdnUrls,
+  zipEntryBasename
+} from './winboxArtifacts'
+
+export { getBundledExpectedName }
 
 /** Seeded / packaged WinBox directory (read-only when packaged). */
 function winboxBundledDir(): string {
@@ -36,24 +51,42 @@ function winboxUserDir(): string {
   return join(app.getPath('userData'), 'winbox')
 }
 
-/** Directory used for downloads / installs. */
 function winboxInstallDir(): string {
   return winboxUserDir()
 }
 
-/** Ожидаемое имя артефакта для текущей платформы. */
-export function getBundledExpectedName(): string {
-  if (process.platform === 'win32') return 'WinBox64.exe'
-  if (process.platform === 'darwin') return 'WinBox.app'
-  return 'WinBox'
+function firstExisting(dir: string, names: string[]): string | null {
+  for (const name of names) {
+    const candidate = join(dir, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
 }
 
-/** Prefer userData install; fall back to bundled seed. */
-function getBundledPath(): string {
-  const name = getBundledExpectedName()
-  const userPath = join(winboxUserDir(), name)
-  if (existsSync(userPath)) return userPath
-  return join(winboxBundledDir(), name)
+/** Prefer userData install; fall back to bundled seed. Accepts legacy WinBox.exe names. */
+function resolveWinboxPath(): string | null {
+  const names = bundledCandidateNames()
+  return firstExisting(winboxUserDir(), names) ?? firstExisting(winboxBundledDir(), names)
+}
+
+/** Copy bundled exe into userData so NSIS updates don't wipe a working install. */
+function seedUserInstall(): string | null {
+  const found = resolveWinboxPath()
+  if (!found) return null
+
+  const dest = join(winboxUserDir(), getBundledExpectedName())
+  if (found === dest) return dest
+
+  try {
+    mkdirSync(winboxUserDir(), { recursive: true })
+    if (!existsSync(dest)) {
+      cpSync(found, dest, { recursive: true })
+    }
+    return existsSync(dest) ? dest : found
+  } catch (err) {
+    logger.warn('Failed to copy WinBox into userData', err)
+    return found
+  }
 }
 
 function isSafeZipEntryName(entryName: string, destRoot: string): boolean {
@@ -82,9 +115,6 @@ function extractZipSafely(zip: AdmZip, destRoot: string): void {
   }
 }
 
-const WINBOX_DOWNLOAD_URL = 'https://mikrotik.com/download/winbox'
-const WINBOX_CDN_BASE = 'https://download.mikrotik.com/routeros/winbox'
-
 const FETCH_BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'User-Agent':
@@ -95,50 +125,6 @@ const FETCH_BINARY_HEADERS = {
   Accept: '*/*',
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-}
-
-function decodeWinboxPageHtml(html: string): string {
-  return html.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\\\//g, '/')
-}
-
-function parseWinboxVersionFromPage(html: string): string {
-  const data = decodeWinboxPageHtml(html)
-  const anchor = data.indexOf('alt="WinBox logo"')
-  const slice = anchor === -1 ? data : data.slice(anchor, anchor + 24000)
-  const fromHeading = slice.match(/<h4 class="font-bold mb-4">v([\d.]+)</)
-  if (fromHeading) return fromHeading[1]
-
-  const fromComponent = data.match(/components\.software\.winbox[^]*?"version":"([\d.]+)"/)
-  if (fromComponent) return fromComponent[1]
-
-  return ''
-}
-
-function parseWinboxArtifactNamesFromPage(html: string): string[] {
-  const data = decodeWinboxPageHtml(html)
-  const names: string[] = []
-  const re = /"name":"(WinBox[^"]+\.(?:zip|dmg))"/g
-  for (let m = re.exec(data); m; m = re.exec(data)) {
-    names.push(m[1])
-  }
-  return [...new Set(names)]
-}
-
-function artifactNamesForPlatform(platform: NodeJS.Platform, fromPage: string[]): string[] {
-  const pageMatches = fromPage.filter((name) => {
-    if (platform === 'win32') return /windows/i.test(name)
-    if (platform === 'darwin') return name.endsWith('.dmg') || /macos|darwin/i.test(name)
-    return /linux/i.test(name)
-  })
-
-  const fallback =
-    platform === 'win32'
-      ? ['WinBox_Windows.zip']
-      : platform === 'darwin'
-        ? ['WinBox.dmg', 'WinBox_macOS.zip', 'WinBox_macos.zip', 'WinBox_Darwin.zip']
-        : ['WinBox_Linux.zip', 'WinBox_linux.zip', 'WinBox_Linux_x64.zip']
-
-  return [...new Set([...pageMatches, ...fallback])]
 }
 
 /**
@@ -175,44 +161,83 @@ async function fetchWinboxPageStatus(): Promise<{
   }
 }
 
-function zipEntryBasename(entryName: string): string {
-  return entryName.replace(/\\/g, '/').split('/').pop() ?? ''
-}
+const BINARY_IDLE_MS = 45_000
+const BINARY_TOTAL_MS = 300_000
 
-async function tryFetchBinary(url: string): Promise<Buffer | null> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 120_000)
-  try {
-    const res = await fetch(url, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: FETCH_BINARY_HEADERS
-    })
-    if (!res.ok) return null
-    return Buffer.from(await res.arrayBuffer())
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
-}
+function downloadBinaryViaHttps(url: string): Promise<Buffer | null> {
+  return new Promise((resolveBuffer) => {
+    let settled = false
+    const finish = (value: Buffer | null): void => {
+      if (settled) return
+      settled = true
+      resolveBuffer(value)
+    }
 
-async function versionCandidatesForCdn(pageVersion: string): Promise<string[]> {
-  return [...new Set([pageVersion, '4.1', '4.0'].filter((v): v is string => !!v))]
+    const get = (current: string, hops: number): void => {
+      if (hops > 5) {
+        finish(null)
+        return
+      }
+
+      const req = https.get(current, { headers: FETCH_BINARY_HEADERS }, (res) => {
+        const location = res.headers.location
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && location) {
+          res.resume()
+          get(new URL(location, current).toString(), hops + 1)
+          return
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          finish(null)
+          return
+        }
+
+        const chunks: Buffer[] = []
+        let idle = setTimeout(() => req.destroy(new Error('IDLE')), BINARY_IDLE_MS)
+        res.on('data', (chunk: Buffer) => {
+          chunks.push(chunk)
+          clearTimeout(idle)
+          idle = setTimeout(() => req.destroy(new Error('IDLE')), BINARY_IDLE_MS)
+        })
+        res.on('end', () => {
+          clearTimeout(idle)
+          finish(Buffer.concat(chunks))
+        })
+        res.on('error', () => {
+          clearTimeout(idle)
+          finish(null)
+        })
+      })
+
+      req.setTimeout(BINARY_TOTAL_MS, () => req.destroy())
+      req.on('error', () => finish(null))
+    }
+
+    get(url, 0)
+  })
 }
 
 async function downloadWinboxArtifactBuffer(): Promise<{ buffer: Buffer; kind: 'zip' | 'dmg' }> {
   const page = await fetchWinboxPageStatus()
-  const versions = await versionCandidatesForCdn(page.version)
-  const names = artifactNamesForPlatform(process.platform, page.artifactNames)
+  if (page.version) {
+    logger.info(`WinBox latest on MikroTik: ${page.version}`)
+  } else {
+    logger.warn('WinBox download page did not expose a version; trying known CDN folders')
+  }
 
-  for (const ver of versions) {
-    for (const name of names) {
-      const url = `${WINBOX_CDN_BASE}/${ver}/${name}`
-      const buffer = await tryFetchBinary(url)
-      if (buffer) {
-        return { buffer, kind: name.endsWith('.dmg') ? 'dmg' : 'zip' }
-      }
+  const urls = winboxCdnUrls(
+    process.platform,
+    process.arch,
+    page.version,
+    page.artifactNames
+  )
+
+  for (const url of urls) {
+    logger.info(`WinBox download try ${url}`)
+    const buffer = await downloadBinaryViaHttps(url)
+    if (buffer && buffer.length > 0) {
+      const kind = url.endsWith('.dmg') ? 'dmg' : 'zip'
+      return { buffer, kind }
     }
   }
 
@@ -221,9 +246,13 @@ async function downloadWinboxArtifactBuffer(): Promise<{ buffer: Buffer; kind: '
 
 function pickWindowsExe(zip: AdmZip): IZipEntry | null {
   const entries = zip.getEntries().filter((e) => !e.isDirectory)
-  const byName = (want: string) =>
-    entries.find((e) => zipEntryBasename(e.entryName).toLowerCase() === want.toLowerCase())
-  return byName('winbox64.exe') || byName('WinBox.exe') || null
+  const chosen = pickWindowsExeBasename(entries.map((e) => zipEntryBasename(e.entryName)))
+  if (!chosen) return null
+  return (
+    entries.find(
+      (e) => zipEntryBasename(e.entryName).toLowerCase() === chosen.toLowerCase()
+    ) ?? null
+  )
 }
 
 function pickLinuxBinary(zip: AdmZip): IZipEntry | null {
@@ -329,6 +358,9 @@ function humanDownloadError(err: unknown): string {
   if (err.message === 'NOT_FOUND') {
     return 'На сервере MikroTik не найден архив WinBox для вашей системы. Откройте страницу загрузки и установите вручную.'
   }
+  if (err.message === 'TIMEOUT') {
+    return 'Превышено время ожидания при загрузке. Проверьте интернет и повторите попытку.'
+  }
   if (err.message === 'BAD_ZIP') {
     return 'Архив WinBox не удалось разобрать. Попробуйте позже или скачайте вручную.'
   }
@@ -345,7 +377,7 @@ function getBundledVersion(exePath: string): Promise<string> {
   if (process.platform !== 'win32' || !existsSync(exePath)) {
     return Promise.resolve('')
   }
-  return new Promise((resolve) => {
+  return new Promise((resolveVersion) => {
     const escaped = exePath.replace(/'/g, "''")
     const ps = spawn(
       'powershell',
@@ -357,7 +389,7 @@ function getBundledVersion(exePath: string): Promise<string> {
     const finish = (value: string): void => {
       if (settled) return
       settled = true
-      resolve(value)
+      resolveVersion(value)
     }
     const timer = setTimeout(() => {
       try {
@@ -392,10 +424,19 @@ function versionGt(a: string, b: string): boolean {
   return false
 }
 
+function localStatus(): { bundled: boolean; bundledExpectedName: string } {
+  const bundledExpectedName = getBundledExpectedName()
+  const seeded = seedUserInstall()
+  return {
+    bundled: !!seeded && existsSync(seeded),
+    bundledExpectedName
+  }
+}
+
 export function setupWinbox(): void {
   ipcMain.handle('winbox:open', async (): Promise<{ ok: boolean; error?: string }> => {
-    const exePath = getBundledPath()
-    if (!existsSync(exePath)) return { ok: false, error: 'not-bundled' }
+    const exePath = seedUserInstall()
+    if (!exePath || !existsSync(exePath)) return { ok: false, error: 'not-bundled' }
     const err = await shell.openPath(exePath)
     return err ? { ok: false, error: err } : { ok: true }
   })
@@ -403,19 +444,12 @@ export function setupWinbox(): void {
   /** Быстрый локальный статус без сети — для кнопки «Открыть» / «Загрузить». */
   ipcMain.handle(
     'winbox:get-local-status',
-    (): { bundled: boolean; bundledExpectedName: string } => {
-      const bundledExpectedName = getBundledExpectedName()
-      return {
-        bundled: existsSync(getBundledPath()),
-        bundledExpectedName
-      }
-    }
+    (): { bundled: boolean; bundledExpectedName: string } => localStatus()
   )
 
   ipcMain.handle('winbox:check-update', async (): Promise<WinboxUpdateInfo> => {
-    const exePath = getBundledPath()
-    const bundledExpectedName = getBundledExpectedName()
-    const bundled = existsSync(exePath)
+    const status = localStatus()
+    const exePath = seedUserInstall() ?? join(winboxBundledDir(), status.bundledExpectedName)
     const [fetchResult, local] = await Promise.all([
       fetchWinboxPageStatus(),
       getBundledVersion(exePath)
@@ -425,9 +459,9 @@ export function setupWinbox(): void {
       latest,
       local,
       hasUpdate: !!latest && !!local && versionGt(latest, local),
-      bundled,
+      bundled: status.bundled,
       mikrotikOnline: fetchResult.reachable,
-      bundledExpectedName
+      bundledExpectedName: status.bundledExpectedName
     }
   })
 
@@ -439,6 +473,7 @@ export function setupWinbox(): void {
       installWinboxFromArtifact(artifact, destDir, destPath)
       return { ok: true }
     } catch (e) {
+      logger.error('WinBox download failed', e)
       return { ok: false, error: humanDownloadError(e) }
     }
   })

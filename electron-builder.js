@@ -63,6 +63,13 @@ function resolveReleasesUrl() {
 const releasesUrl = resolveReleasesUrl()
 console.log(`[electron-builder] publish.url → ${releasesUrl}`)
 
+const winboxExe = join(__dirname, 'resources', 'winbox', 'WinBox64.exe')
+if (!existsSync(winboxExe)) {
+  console.warn(
+    '[electron-builder] resources/winbox/WinBox64.exe is missing — Windows installer will not bundle WinBox. Run `npm run winbox:download` before `npm run build`.'
+  )
+}
+
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
   appId: 'com.nvi.knowhub',
@@ -100,7 +107,7 @@ module.exports = {
       {
         from: 'resources/winbox',
         to: 'winbox',
-        filter: ['WinBox64.exe']
+        filter: ['**/*.exe']
       }
     ]
   },

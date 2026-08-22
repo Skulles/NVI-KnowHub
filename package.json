@@ -1,6 +1,6 @@
 {
   "name": "nvi-knowhub",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "База знаний NVI",
   "main": "out/main/index.js",
   "scripts": {

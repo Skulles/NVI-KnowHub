@@ -308,17 +308,15 @@ export function MikrotikConfigGenerator() {
     const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
     const lower = "abcdefghjkmnpqrstuvwxyz";
     const digits = "23456789";
-    const special = "!@#$%&*";
-    const all = upper + lower + digits + special;
+    const all = upper + lower + digits;
     const pick = (s: string): string => s[Math.floor(Math.random() * s.length)];
     const chars = [
       pick(upper),
       pick(lower),
       pick(digits),
-      pick(special),
-      ...Array.from({ length: 8 }, () => pick(all)),
-    ];
-    return chars.sort(() => Math.random() - 0.5).join("");
+      ...Array.from({ length: 9 }, () => pick(all)),
+    ].sort(() => Math.random() - 0.5);
+    return `${chars.slice(0, 6).join("")}-${chars.slice(6).join("")}`;
   }, []);
 
   const generateAdminPassword = useCallback(() => {

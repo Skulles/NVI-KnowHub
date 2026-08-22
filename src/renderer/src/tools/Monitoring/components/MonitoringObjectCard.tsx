@@ -243,12 +243,16 @@ function formatResourceTemp(value: number | null | undefined): string {
 
 function resourceLoadTextClass(loadPercent: number | null | undefined): string {
   if (loadPercent === null || loadPercent === undefined || !Number.isFinite(loadPercent)) return 'text-label-tertiary'
-  return loadPercent > 85 ? 'text-red-400' : 'text-label-tertiary'
+  if (loadPercent > 90) return 'text-red-400'
+  if (loadPercent > 80) return 'text-amber-300'
+  return 'text-label-tertiary'
 }
 
 function resourceTempTextClass(tempC: number | null | undefined): string {
   if (tempC === null || tempC === undefined || !Number.isFinite(tempC)) return 'text-label-tertiary'
-  return tempC > 85 ? 'text-red-400' : 'text-label-tertiary'
+  if (tempC > 85) return 'text-red-400'
+  if (tempC > 75) return 'text-amber-300'
+  return 'text-label-tertiary'
 }
 
 function FlippingMetricValue({

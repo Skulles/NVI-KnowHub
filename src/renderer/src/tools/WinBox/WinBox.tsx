@@ -48,10 +48,18 @@ export function WinBox() {
       <div className="flex flex-col gap-4">
         {/* not bundled warning — та же кнопка: сначала «Загрузить», после — «Открыть» */}
         {launcher.status.needsDownload && (
-          <aside className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3">
+          <aside className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 space-y-2">
             <p className="m-0 text-[14px] text-amber-400 leading-relaxed">
-              {launcher.status.expectedName} не найден
+              WinBox не найден в приложении. Нажмите «Загрузить» — файл сохранится в данные
+              пользователя и не пропадёт после обновления KnowHub.
             </p>
+            <button
+              type="button"
+              onClick={launcher.actions.openDownloadPage}
+              className="m-0 text-[13px] font-medium text-amber-300/90 underline-offset-2 hover:underline"
+            >
+              Открыть страницу загрузки MikroTik
+            </button>
           </aside>
         )}
 
@@ -67,6 +75,13 @@ export function WinBox() {
             {launcher.errors.download && (
               <p className="m-0">{launcher.errors.download}</p>
             )}
+            <button
+              type="button"
+              onClick={launcher.actions.openDownloadPage}
+              className="m-0 text-[13px] font-medium text-red-300 underline-offset-2 hover:underline"
+            >
+              Открыть страницу загрузки MikroTik
+            </button>
           </div>
         )}
       </div>

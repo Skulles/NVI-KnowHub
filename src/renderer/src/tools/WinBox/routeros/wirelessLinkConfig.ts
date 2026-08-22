@@ -131,6 +131,31 @@ export function linkChannelSettings(band: GrooveaWirelessBand): {
   }
 }
 
+function formatLinkChannelLabel(frequency: number): string {
+  const ghz = frequency / 1000
+  const ghzLabel = ghz >= 10 ? ghz.toFixed(2) : ghz.toFixed(3)
+  return `канал ${frequency} (${ghzLabel}\u00a0ГГц)`
+}
+
+/** Short radio note under antenna settings — same style as the nRAY W60G line. */
+export function buildWirelessLinkNote(
+  wirelessStack: WirelessStack,
+  protocol: GrooveaWirelessProtocol,
+  band: GrooveaWirelessBand,
+): string {
+  if (wirelessStack === 'w60g') {
+    return `PtP-линк 60\u00a0ГГц (W60G): ${formatLinkChannelLabel(NRAY_W60G_FREQUENCY)}, регион EU.`
+  }
+
+  const { frequency } = linkChannelSettings(band)
+  const channel = formatLinkChannelLabel(frequency)
+  if (wirelessStack === 'wifi') {
+    return `PtP-линк ${band} (Wi-Fi 6): ${channel}, ширина 20 МГц, страна Russia.`
+  }
+
+  return `PtP-линк ${band} (${protocol}): ${channel}, outdoor, страна russia.`
+}
+
 export function buildCredentialsSummary(owlDigits: string, adminPassword: string): string {
   return [
     `OWLGUARD ID: ${owlDigits}`,

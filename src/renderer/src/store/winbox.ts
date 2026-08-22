@@ -64,7 +64,7 @@ export const useWinboxStore = create<WinboxStore>((set) => ({
       mikrotikOnline,
       bundledExpectedName
     }),
-  setError: () => set({ checkStatus: 'error' }),
+  setError: () => set({ checkStatus: 'error', localReady: true }),
   dismissToast: () => set({ toastDismissed: true }),
   setSidebarOpenError: (msg) => set({ sidebarOpenError: msg })
 }))
