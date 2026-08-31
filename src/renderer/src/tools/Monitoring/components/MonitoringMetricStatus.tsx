@@ -165,7 +165,8 @@ export function MetricHoverTooltip({
   onMouseEnter,
   onMouseLeave,
   onRefresh,
-  refreshing = false
+  refreshing = false,
+  compact = false
 }: {
   children: ReactNode
   anchorEl: HTMLElement | null
@@ -173,6 +174,7 @@ export function MetricHoverTooltip({
   onMouseLeave?: () => void
   onRefresh?: () => void
   refreshing?: boolean
+  compact?: boolean
 }) {
   const tooltipRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -272,7 +274,11 @@ export function MetricHoverTooltip({
       ) : null}
       <div
         ref={contentRef}
-        className={`overscroll-contain py-2.5 pl-3 ${onRefresh ? 'pr-11' : 'pr-3'}`}
+        className={`overscroll-contain ${
+          compact
+            ? `py-[5px] pl-1.5 ${onRefresh ? 'pr-11' : 'pr-1.5'}`
+            : `py-2.5 pl-3 ${onRefresh ? 'pr-11' : 'pr-3'}`
+        }`}
         style={{
           maxHeight: placement?.maxHeight,
           overflowY: placement?.maxHeight !== undefined ? 'auto' : 'visible'

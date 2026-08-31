@@ -5,9 +5,18 @@ import type {
   MonitoringMegaphone
 } from '@shared/api'
 
+export type MonitoringObjectKind = 'auto' | 'drilling' | 'tkrs'
+
+export const DEFAULT_OBJECT_KIND: MonitoringObjectKind = 'auto'
+
+export function normalizeMonitoringObjectKind(value: unknown): MonitoringObjectKind {
+  return value === 'drilling' || value === 'tkrs' || value === 'auto' ? value : 'auto'
+}
+
 export interface MonitoringObject {
   id: string
   code: string
+  objectKind: MonitoringObjectKind
   linkHost: string
   serverHost: string
   serverLogin: string
@@ -278,6 +287,7 @@ export function parseMonitoringObject(raw: string): MonitoringObject | null {
   return {
     id: normalizedCode,
     code: normalizedCode,
+    objectKind: DEFAULT_OBJECT_KIND,
     linkHost: `10.${Number(nn)}.${Number(yy)}.1`,
     serverHost: `10.${Number(nn)}.${Number(yy)}.252`,
     serverLogin: DEFAULT_SERVER_LOGIN,
@@ -290,7 +300,8 @@ export function buildMonitoringObject(
   linkHost: string,
   serverHost: string,
   serverLogin = DEFAULT_SERVER_LOGIN,
-  serverPassword = ''
+  serverPassword = '',
+  objectKind: MonitoringObjectKind = DEFAULT_OBJECT_KIND
 ): MonitoringObject | null {
   const parsed = parseMonitoringObject(digits)
   if (!parsed) return null
@@ -298,6 +309,7 @@ export function buildMonitoringObject(
 
   return {
     ...parsed,
+    objectKind: normalizeMonitoringObjectKind(objectKind),
     linkHost: linkHost.trim(),
     serverHost: serverHost.trim(),
     serverLogin: serverLogin.trim(),
@@ -343,6 +355,9 @@ function normalizeObjects(value: unknown): MonitoringObject[] {
         ? item.serverLogin.trim()
         : DEFAULT_SERVER_LOGIN
     const serverPassword = 'serverPassword' in item && typeof item.serverPassword === 'string' ? item.serverPassword : ''
+    const objectKind = normalizeMonitoringObjectKind(
+      'objectKind' in item ? (item as { objectKind?: unknown }).objectKind : undefined
+    )
     const serverVersion =
       'serverVersion' in item && typeof item.serverVersion === 'string' && item.serverVersion.trim()
         ? item.serverVersion.trim()
@@ -412,6 +427,7 @@ function normalizeObjects(value: unknown): MonitoringObject[] {
     seen.add(parsed.id)
     objects.push({
       ...parsed,
+      objectKind,
       linkHost,
       serverHost,
       serverLogin,

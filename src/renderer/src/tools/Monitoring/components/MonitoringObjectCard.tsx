@@ -16,6 +16,13 @@ import {
   resolvePrimaryLocationName,
   type MonitoringObject
 } from '../monitoringStorage'
+import { MONITORING_OBJECT_KIND_LABELS } from '../monitoringObjectKind'
+import {
+  RESOURCE_LOAD_CRIT_PERCENT,
+  RESOURCE_LOAD_WARN_PERCENT,
+  RESOURCE_TEMP_CRIT_C,
+  RESOURCE_TEMP_WARN_C
+} from '../monitoringObjectHealth'
 import type {
   LatencyHistoryMap,
   MonitoringMetricKind,
@@ -243,15 +250,15 @@ function formatResourceTemp(value: number | null | undefined): string {
 
 function resourceLoadTextClass(loadPercent: number | null | undefined): string {
   if (loadPercent === null || loadPercent === undefined || !Number.isFinite(loadPercent)) return 'text-label-tertiary'
-  if (loadPercent > 90) return 'text-red-400'
-  if (loadPercent > 80) return 'text-amber-300'
+  if (loadPercent > RESOURCE_LOAD_CRIT_PERCENT) return 'text-red-400'
+  if (loadPercent > RESOURCE_LOAD_WARN_PERCENT) return 'text-amber-300'
   return 'text-label-tertiary'
 }
 
 function resourceTempTextClass(tempC: number | null | undefined): string {
   if (tempC === null || tempC === undefined || !Number.isFinite(tempC)) return 'text-label-tertiary'
-  if (tempC > 85) return 'text-red-400'
-  if (tempC > 75) return 'text-amber-300'
+  if (tempC > RESOURCE_TEMP_CRIT_C) return 'text-red-400'
+  if (tempC > RESOURCE_TEMP_WARN_C) return 'text-amber-300'
   return 'text-label-tertiary'
 }
 
@@ -1057,6 +1064,11 @@ export function MonitoringObjectCard({
         <span className={`flex min-w-0 ${compact ? 'items-center gap-2' : 'flex-col gap-0.5'}`}>
           <span className="flex min-w-0 items-center gap-2">
             <ObjectCodeTitle code={object.code} />
+            {(object.objectKind === 'drilling' || object.objectKind === 'tkrs') && (
+              <span className="rounded-md bg-tint-blue/15 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-wide text-tint-blue">
+                {MONITORING_OBJECT_KIND_LABELS[object.objectKind]}
+              </span>
+            )}
             {debug && (
               <span className="rounded-md bg-amber-300/15 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-wide text-amber-300">
                 debug
@@ -1231,6 +1243,7 @@ export function MonitoringDebugObjectCard({ now, compact = false }: { now: numbe
   const object: MonitoringObject = {
     id: 'debug-preview',
     code: 'owl9999',
+    objectKind: 'drilling',
     linkHost: '10.12.34.1',
     serverHost: '10.12.34.252',
     serverLogin: DEFAULT_SERVER_LOGIN,

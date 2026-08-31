@@ -11,6 +11,7 @@ import {
   type MonitoringObject,
   type MonitoringSnapshot
 } from '../monitoringStorage'
+import { applyResolvedObjectKind } from '../monitoringObjectKind'
 import { isCredentialAuthError, localizeMonitoringError } from '../monitoringErrors'
 import { resolveLanActiveObjectId } from '../monitoringLanScope'
 import type {
@@ -447,11 +448,11 @@ export function useMonitoringProbes({
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
-                ? {
+                ? applyResolvedObjectKind({
                     ...item,
                     cameraStreams: streamsResult.streams,
                     camerasTotal: streamsResult.streams.length
-                  }
+                  })
                 : item
             )
           }))
@@ -512,7 +513,7 @@ export function useMonitoringProbes({
               }
               if (primaryLocationName) next.primaryLocationName = primaryLocationName
               else delete next.primaryLocationName
-              return next
+              return applyResolvedObjectKind(next)
             })
           }))
         }
@@ -544,12 +545,12 @@ export function useMonitoringProbes({
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
-                ? {
+                ? applyResolvedObjectKind({
                     ...item,
                     megaphones: megaphonesResult.megaphones,
                     megaphonesTotal: megaphonesResult.megaphones.length,
                     ...(megaphonesResult.megaphones.length === 0 ? { megaphonesOnline: 0, megaphonesOnlineIds: [] } : {})
-                  }
+                  })
                 : item
             )
           }))
@@ -582,13 +583,13 @@ export function useMonitoringProbes({
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
-                ? {
+                ? applyResolvedObjectKind({
                     ...item,
                     guardDevices: devicesResult.devices,
                     ...(devicesResult.devices.length === 0
                       ? { devicesOnline: 0, devicesOnlineIds: [] }
                       : {})
-                  }
+                  })
                 : item
             )
           }))
@@ -682,13 +683,13 @@ export function useMonitoringProbes({
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
-                ? {
+                ? applyResolvedObjectKind({
                     ...item,
                     cameraStreams: streamsResult.streams,
                     camerasTotal: streamsResult.streams.length,
                     camerasOnline: previewResult.onlineCount,
                     camerasOnlineIds: previewResult.onlineIds ?? []
-                  }
+                  })
                 : item
             )
           }))
@@ -721,13 +722,13 @@ export function useMonitoringProbes({
           setSnapshot((prev) => ({
             objects: prev.objects.map((item) =>
               item.id === object.id
-                ? {
+                ? applyResolvedObjectKind({
                     ...item,
                     megaphones: megaphonesResult.megaphones,
                     megaphonesTotal: megaphonesResult.megaphones.length,
                     megaphonesOnline: statusesResult.onlineCount,
                     megaphonesOnlineIds: statusesResult.onlineIds ?? []
-                  }
+                  })
                 : item
             )
           }))
@@ -757,12 +758,12 @@ export function useMonitoringProbes({
         setSnapshot((prev) => ({
           objects: prev.objects.map((item) =>
             item.id === object.id
-              ? {
+              ? applyResolvedObjectKind({
                   ...item,
                   guardDevices: devicesResult.devices,
                   devicesOnline: probeResult.onlineCount,
                   devicesOnlineIds: probeResult.onlineIds ?? []
-                }
+                })
               : item
           )
         }))

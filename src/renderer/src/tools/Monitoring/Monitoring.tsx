@@ -1,11 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowPathIcon } from '../../components/Icons'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode
+} from 'react'
+import { ArrowPathIcon, XMarkIcon } from '../../components/Icons'
 import {
   compareMonitoringObjectsByDigits,
   loadMonitoringSnapshot,
   saveMonitoringSnapshot,
   type MonitoringObject
 } from './monitoringStorage'
+import { applyResolvedObjectKind, MONITORING_OBJECT_KIND_SUMMARY_LABELS } from './monitoringObjectKind'
+import {
+  groupHealthByObjectKind,
+  HEALTH_COLORS,
+  HEALTH_LABELS,
+  resolveObjectHealthFromProbes,
+  type MonitoringObjectHealth,
+  type SummaryHealthFilter
+} from './monitoringObjectHealth'
 import type {
   EditorState,
   MonitoringViewMode,
@@ -16,6 +33,8 @@ import {
   MonitoringDebugObjectCard,
   MonitoringObjectCard
 } from './components/MonitoringObjectCard'
+import { MetricHoverTooltip } from './components/MonitoringMetricStatus'
+import { MonitoringSummaryStats } from './components/MonitoringSummaryStats'
 import { recentPacketLossPercent } from './monitoringSchedule'
 import { useMonitoringProbes } from './hooks/useMonitoringProbes'
 
@@ -53,6 +72,75 @@ function TableViewIcon() {
   )
 }
 
+function ToolbarIconButton({
+  hint,
+  children,
+  onMouseEnter,
+  onMouseLeave,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { hint: string; children: ReactNode }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  const [hovered, setHovered] = useState(false)
+
+  return (
+    <>
+      <button
+        ref={ref}
+        {...props}
+        onMouseEnter={(event) => {
+          onMouseEnter?.(event)
+          setHovered(true)
+        }}
+        onMouseLeave={(event) => {
+          onMouseLeave?.(event)
+          setHovered(false)
+        }}
+      >
+        {children}
+      </button>
+      {hovered ? (
+        <MetricHoverTooltip compact anchorEl={ref.current}>
+          <p className="m-0 text-[13px] font-medium leading-snug text-label-primary">{hint}</p>
+        </MetricHoverTooltip>
+      ) : null}
+    </>
+  )
+}
+
+function SummaryStatsIcon() {
+  const radius = 6.8
+  const circumference = 2 * Math.PI * radius
+  const segments = [
+    { share: 0.42, opacity: 1 },
+    { share: 0.28, opacity: 0.55 },
+    { share: 0.3, opacity: 0.28 }
+  ]
+  let offset = 0
+
+  return (
+    <svg viewBox="0 0 20 20" className="h-4 w-4 -rotate-90" fill="none" aria-hidden>
+      {segments.map((segment) => {
+        const length = segment.share * circumference
+        const circle = (
+          <circle
+            key={segment.opacity}
+            cx="10"
+            cy="10"
+            r={radius}
+            stroke="currentColor"
+            strokeWidth="3.4"
+            strokeDasharray={`${length} ${circumference - length}`}
+            strokeDashoffset={-offset}
+            opacity={segment.opacity}
+          />
+        )
+        offset += length
+        return circle
+      })}
+    </svg>
+  )
+}
+
 const EMPTY_SERVER_RESOURCES: ServerResourceStubs = {
   cpuLoad: null,
   cpuTempC: null,
@@ -67,11 +155,12 @@ const SHOW_MONITORING_DEBUG_CARD = false
 const DEBUG_LAN_OBJECT_CODE = 'owl9999'
 
 const MONITORING_VIEW_MODE_KEY = 'monitoring-view-mode'
+const MONITORING_SUMMARY_STATS_KEY = 'monitoring-summary-stats'
 
 export function Monitoring({ screenActive = true }: { screenActive?: boolean }) {
   const [snapshot, setSnapshot] = useState(() => {
     const loaded = loadMonitoringSnapshot()
-    return { objects: loaded.objects.map(clearCachedMetricCounts) }
+    return { objects: loaded.objects.map(clearCachedMetricCounts).map(applyResolvedObjectKind) }
   })
   const [viewMode, setViewMode] = useState<MonitoringViewMode>(() => {
     try {
@@ -80,6 +169,14 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
       return 'cards'
     }
   })
+  const [summaryStatsOpen, setSummaryStatsOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(MONITORING_SUMMARY_STATS_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const [summaryFilter, setSummaryFilter] = useState<SummaryHealthFilter | null>(null)
   const [editor, setEditor] = useState<EditorState>(null)
   const {
     results,
@@ -129,9 +226,50 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
     }
   }, [viewMode])
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MONITORING_SUMMARY_STATS_KEY, summaryStatsOpen ? '1' : '0')
+    } catch {
+      // The toggle still works when persistent storage is unavailable.
+    }
+  }, [summaryStatsOpen])
+
   const editingObject = useMemo(
     () => (editor?.mode === 'edit' && editor.objectId ? snapshot.objects.find((object) => object.id === editor.objectId) ?? null : null),
     [editor, snapshot.objects]
+  )
+
+  const healthById = useMemo(() => {
+    const next: Record<string, MonitoringObjectHealth | null> = {}
+    for (const object of snapshot.objects) {
+      next[object.id] = resolveObjectHealthFromProbes(object, results, {
+        serverVersionError: serverVersionErrors[object.id],
+        camerasMetricFailed: camerasMetricFailed[object.id],
+        megaphonesMetricFailed: megaphonesMetricFailed[object.id],
+        cpuLoad: cpuLoads[object.id],
+        cpuTempC: cpuTemps[object.id],
+        gpuLoad: gpuLoads[object.id],
+        gpuTempC: gpuTemps[object.id],
+        ramLoad: ramLoads[object.id]
+      })
+    }
+    return next
+  }, [
+    camerasMetricFailed,
+    cpuLoads,
+    cpuTemps,
+    gpuLoads,
+    gpuTemps,
+    megaphonesMetricFailed,
+    ramLoads,
+    results,
+    serverVersionErrors,
+    snapshot.objects
+  ])
+
+  const summaryGroups = useMemo(
+    () => (summaryStatsOpen ? groupHealthByObjectKind(snapshot.objects, healthById) : []),
+    [healthById, snapshot.objects, summaryStatsOpen]
   )
 
   const sortedObjects = useMemo(() => {
@@ -142,6 +280,21 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
     const [active] = sorted.splice(activeIndex, 1)
     return [active, ...sorted]
   }, [lanActiveObjectId, snapshot.objects])
+
+  const visibleObjects = useMemo(() => {
+    if (!summaryFilter) return sortedObjects
+    return sortedObjects.filter((object) => {
+      if (object.objectKind !== summaryFilter.kind) return false
+      if (!summaryFilter.health) return true
+      return healthById[object.id] === summaryFilter.health
+    })
+  }, [healthById, sortedObjects, summaryFilter])
+
+  const selectSummaryFilter = useCallback((filter: SummaryHealthFilter): void => {
+    setSummaryFilter((prev) =>
+      prev && prev.kind === filter.kind && prev.health === filter.health ? null : filter
+    )
+  }, [])
 
   useEffect(() => {
     saveMonitoringSnapshot(snapshot)
@@ -161,10 +314,11 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
             object.serverHost === next.serverHost &&
             object.serverLogin === next.serverLogin &&
             object.serverPassword === next.serverPassword
-          return {
+          return applyResolvedObjectKind({
             ...next,
             id: originalId,
             code: object.code,
+            objectKind: next.objectKind,
             ...(sameCredentials && object.serverVersion ? { serverVersion: object.serverVersion } : {}),
             ...(sameCredentials && object.primaryLocationName
               ? { primaryLocationName: object.primaryLocationName }
@@ -202,12 +356,21 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
                       : {})
                   }
                 : {}),
-          }
+            ...(sameCredentials && object.guardDevices
+              ? {
+                  guardDevices: object.guardDevices,
+                  ...(object.devicesOnline !== undefined ? { devicesOnline: object.devicesOnline } : {}),
+                  ...(object.devicesOnlineIds !== undefined
+                    ? { devicesOnlineIds: object.devicesOnlineIds }
+                    : {})
+                }
+              : {})
+          })
         })
       } else if (prev.objects.some((object) => object.id === next.id)) {
         return false
       } else {
-        nextObjects = [...prev.objects, next]
+        nextObjects = [...prev.objects, applyResolvedObjectKind(next)]
       }
 
       setSnapshot({ objects: [...nextObjects].sort(compareMonitoringObjectsByDigits) })
@@ -270,53 +433,111 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
         onDelete={deleteObject}
       />
 
-      <div className="mb-2 flex items-center justify-end gap-1">
-        <button
-          type="button"
-          onClick={() => void refreshAllData()}
-          aria-label="Обновить все данные"
-          aria-busy={manualRefreshLoading}
-          disabled={manualRefreshLoading || sortedObjects.length === 0}
-          title="Обновить все данные"
-          className="flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors hover:text-label-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 disabled:cursor-default disabled:opacity-40"
-        >
-          <ArrowPathIcon className={`h-4 w-4 ${manualRefreshLoading ? 'animate-spin' : ''}`} />
-        </button>
-        <div
-          className="flex items-center gap-0.5"
-          role="group"
-          aria-label="Вид карточек"
-        >
-          <button
+      <div className="mb-2 flex items-center justify-between gap-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <ToolbarIconButton
             type="button"
-            onClick={() => setViewMode('cards')}
-            aria-label="Карточки"
-            aria-pressed={viewMode === 'cards'}
-            className={`flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
-              viewMode === 'cards' ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
+            hint="Сводная статистика"
+            onClick={() => setSummaryStatsOpen((prev) => !prev)}
+            aria-label="Сводная статистика"
+            aria-pressed={summaryStatsOpen}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
+              summaryStatsOpen ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
             }`}
           >
-            <CardsViewIcon />
-          </button>
-          <button
+            <SummaryStatsIcon />
+          </ToolbarIconButton>
+          {summaryStatsOpen ? (
+            <>
+              <span className="min-w-0 truncate text-[12px] font-medium text-label-secondary">
+                {summaryFilter ? (
+                  <>
+                    {MONITORING_OBJECT_KIND_SUMMARY_LABELS[summaryFilter.kind]}
+                    {summaryFilter.health ? (
+                      <>
+                        <span className="text-label-tertiary"> · </span>
+                        <span className={HEALTH_COLORS[summaryFilter.health]}>
+                          {HEALTH_LABELS[summaryFilter.health]}
+                        </span>
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  'Все объекты'
+                )}
+              </span>
+              {summaryFilter ? (
+                <ToolbarIconButton
+                  type="button"
+                  hint="Сбросить"
+                  onClick={() => setSummaryFilter(null)}
+                  aria-label="Сбросить фильтр"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-label-tertiary transition-colors hover:bg-white/[0.06] hover:text-label-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60"
+                >
+                  <XMarkIcon className="h-3.5 w-3.5" />
+                </ToolbarIconButton>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-1">
+          <ToolbarIconButton
             type="button"
-            onClick={() => setViewMode('table')}
-            aria-label="Табличный вид"
-            aria-pressed={viewMode === 'table'}
-            className={`flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
-              viewMode === 'table' ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
-            }`}
+            hint="Обновить все данные"
+            onClick={() => void refreshAllData()}
+            aria-label="Обновить все данные"
+            aria-busy={manualRefreshLoading}
+            disabled={manualRefreshLoading || sortedObjects.length === 0}
+            className="flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors hover:text-label-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 disabled:cursor-default disabled:opacity-40"
           >
-            <TableViewIcon />
-          </button>
+            <ArrowPathIcon className={`h-4 w-4 ${manualRefreshLoading ? 'animate-spin' : ''}`} />
+          </ToolbarIconButton>
+          <div
+            className="flex items-center gap-0.5"
+            role="group"
+            aria-label="Вид карточек"
+          >
+            <ToolbarIconButton
+              type="button"
+              hint="Карточки"
+              onClick={() => setViewMode('cards')}
+              aria-label="Карточки"
+              aria-pressed={viewMode === 'cards'}
+              className={`flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
+                viewMode === 'cards' ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
+              }`}
+            >
+              <CardsViewIcon />
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              type="button"
+              hint="Табличный вид"
+              onClick={() => setViewMode('table')}
+              aria-label="Табличный вид"
+              aria-pressed={viewMode === 'table'}
+              className={`flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
+                viewMode === 'table' ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
+              }`}
+            >
+              <TableViewIcon />
+            </ToolbarIconButton>
+          </div>
         </div>
       </div>
+
+      {summaryStatsOpen ? (
+        <MonitoringSummaryStats
+          groups={summaryGroups}
+          selected={summaryFilter}
+          onSelect={selectSummaryFilter}
+        />
+      ) : null}
 
       <div className={`grid ${viewMode === 'table' ? 'gap-3' : 'gap-4 lg:grid-cols-2'}`}>
         {SHOW_MONITORING_DEBUG_CARD ? (
           <MonitoringDebugObjectCard now={uiClock} compact={viewMode === 'table'} />
         ) : null}
-        {sortedObjects.map((object) => (
+        {visibleObjects.map((object) => (
           <MonitoringObjectCard
             key={object.id}
             object={object}
@@ -365,9 +586,11 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
         ))}
       </div>
 
-      {sortedObjects.length === 0 && (
+      {visibleObjects.length === 0 && (
         <p className="mt-6 text-center text-[15px] font-medium text-label-secondary">
-          Нет объектов для отслеживания
+          {snapshot.objects.length === 0
+            ? 'Нет объектов для отслеживания'
+            : 'Нет объектов с таким статусом'}
         </p>
       )}
     </article>

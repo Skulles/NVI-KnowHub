@@ -1,10 +1,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon } from '../../../components/Icons'
+import { ChevronRightIcon, XMarkIcon } from '../../../components/Icons'
 import {
+  DEFAULT_OBJECT_KIND,
   DEFAULT_SERVER_LOGIN,
   buildMonitoringObject,
   joinIPv4Octets,
+  normalizeMonitoringObjectKind,
   normalizePastedIPv4,
   objectDigits,
   parseIPv4Octets,
@@ -12,9 +14,13 @@ import {
   sanitizeMonitoringDigits,
   sanitizeIPv4OctetInput,
   type IPv4Octets,
-  type MonitoringObject
+  type MonitoringObject,
+  type MonitoringObjectKind
 } from '../monitoringStorage'
+import { MONITORING_OBJECT_KIND_EDITOR_LABELS } from '../monitoringObjectKind'
 import type { EditorState } from '../monitoringTypes'
+
+const OBJECT_KIND_OPTIONS: MonitoringObjectKind[] = ['auto', 'drilling', 'tkrs']
 
 function EyeIcon() {
   return (
@@ -29,6 +35,18 @@ function EyeSlashIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
       <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 2.25 12s3.75 6.75 9.75 6.75c1.77 0 3.4-.37 4.82-.98M6.228 6.228A10.45 10.45 0 0 1 12 5.25c6 0 9.75 6.75 9.75 6.75a10.477 10.477 0 0 1-1.728 2.772M6.228 6.228 3 3m3.228 3.228 13.544 13.544M21 21l-2.772-2.772" />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M16.704 5.29a.75.75 0 0 1 .006 1.06l-7.25 7.375a.75.75 0 0 1-1.074-.008L3.29 8.54a.75.75 0 1 1 1.072-1.05l4.32 4.406 6.714-6.83a.75.75 0 0 1 1.06-.006Z"
+        clipRule="evenodd"
+      />
     </svg>
   )
 }
@@ -59,6 +77,139 @@ const textFieldClass =
 
 const ipv4OctetClass =
   'min-w-0 w-[2.75rem] flex-1 bg-transparent py-0 text-center text-[14px] text-label-primary focus:outline-none'
+
+function KindSelect({
+  value,
+  onChange
+}: {
+  value: MonitoringObjectKind
+  onChange: (value: MonitoringObjectKind) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.max(0, OBJECT_KIND_OPTIONS.indexOf(value))
+  )
+  const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const activeIndexRef = useRef(activeIndex)
+  const listId = 'monitoring-object-kind-list'
+  activeIndexRef.current = activeIndex
+
+  const close = useCallback((): void => {
+    setOpen(false)
+    buttonRef.current?.focus()
+  }, [])
+
+  const selectKind = useCallback(
+    (kind: MonitoringObjectKind): void => {
+      onChange(kind)
+      setOpen(false)
+      buttonRef.current?.focus()
+    },
+    [onChange]
+  )
+
+  useEffect(() => {
+    if (!open) return
+    setActiveIndex(Math.max(0, OBJECT_KIND_OPTIONS.indexOf(value)))
+
+    const onPointerDown = (event: PointerEvent): void => {
+      if (rootRef.current?.contains(event.target as Node)) return
+      setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        close()
+        return
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const delta = event.key === 'ArrowDown' ? 1 : -1
+        const nextIndex =
+          (activeIndexRef.current + delta + OBJECT_KIND_OPTIONS.length) % OBJECT_KIND_OPTIONS.length
+        activeIndexRef.current = nextIndex
+        setActiveIndex(nextIndex)
+        return
+      }
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        const next = OBJECT_KIND_OPTIONS[activeIndexRef.current]
+        if (next) selectKind(next)
+      }
+    }
+
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [close, open, selectKind, value])
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="Тип объекта"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((prev) => !prev)}
+        className={`${textFieldClass} flex cursor-pointer items-center justify-between gap-2 px-3 text-left ${
+          open ? 'border-transparent ring-2 ring-tint-blue/50' : ''
+        }`}
+      >
+        <span className="min-w-0 truncate">{MONITORING_OBJECT_KIND_EDITOR_LABELS[value]}</span>
+        <ChevronRightIcon
+          className={`h-3.5 w-3.5 shrink-0 text-label-tertiary transition-transform duration-200 ${
+            open ? '-rotate-90' : 'rotate-90'
+          }`}
+        />
+      </button>
+      {open ? (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label="Тип объекта"
+          className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 m-0 list-none rounded-xl border border-surface-border/80 bg-surface-raised p-1 shadow-sheet"
+        >
+          {OBJECT_KIND_OPTIONS.map((kind, index) => {
+            const selected = kind === value
+            const active = index === activeIndex
+            return (
+              <li key={kind} role="presentation">
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => selectKind(kind)}
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[14px] tracking-tight transition-colors focus-visible:outline-none ${
+                    selected
+                      ? 'bg-tint-blue/15 text-label-primary'
+                      : active
+                        ? 'bg-white/[0.05] text-label-primary'
+                        : 'text-label-secondary hover:bg-white/[0.05] hover:text-label-primary'
+                  }`}
+                >
+                  <span>{MONITORING_OBJECT_KIND_EDITOR_LABELS[kind]}</span>
+                  {selected ? (
+                    <span className="text-tint-blue">
+                      <CheckIcon />
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
 
 function IPv4Field({
   value,
@@ -194,6 +345,7 @@ export function ObjectEditorModal({
 }) {
   const isEdit = editor?.mode === 'edit'
   const [digits, setDigits] = useState('')
+  const [objectKind, setObjectKind] = useState<MonitoringObjectKind>(DEFAULT_OBJECT_KIND)
   const [linkHost, setLinkHost] = useState('')
   const [serverHost, setServerHost] = useState('')
   const [serverLogin, setServerLogin] = useState(DEFAULT_SERVER_LOGIN)
@@ -204,6 +356,7 @@ export function ObjectEditorModal({
   useEffect(() => {
     if (!editor) {
       setDigits('')
+      setObjectKind(DEFAULT_OBJECT_KIND)
       setLinkHost('')
       setServerHost('')
       setServerLogin(DEFAULT_SERVER_LOGIN)
@@ -215,12 +368,14 @@ export function ObjectEditorModal({
 
     if (isEdit && object) {
       setDigits(objectDigits(object))
+      setObjectKind(normalizeMonitoringObjectKind(object.objectKind))
       setLinkHost(object.linkHost)
       setServerHost(object.serverHost)
       setServerLogin(object.serverLogin || DEFAULT_SERVER_LOGIN)
       setServerPassword(object.serverPassword)
     } else {
       setDigits('')
+      setObjectKind(DEFAULT_OBJECT_KIND)
       setLinkHost('')
       setServerHost('')
       setServerLogin(DEFAULT_SERVER_LOGIN)
@@ -257,7 +412,14 @@ export function ObjectEditorModal({
   const handleSave = (): void => {
     let next: MonitoringObject | null = null
     if (isEdit && object) {
-      next = buildMonitoringObject(objectDigits(object), linkHost, serverHost, serverLogin, serverPassword)
+      next = buildMonitoringObject(
+        objectDigits(object),
+        linkHost,
+        serverHost,
+        serverLogin,
+        serverPassword,
+        objectKind
+      )
       if (!next) {
         setError('Проверьте IP-адреса')
         return
@@ -268,7 +430,7 @@ export function ObjectEditorModal({
         setError('Введите 4 цифры ID объекта')
         return
       }
-      next = buildMonitoringObject(digits, linkHost, serverHost, serverLogin, serverPassword)
+      next = buildMonitoringObject(digits, linkHost, serverHost, serverLogin, serverPassword, objectKind)
       if (!next) {
         setError('Проверьте ID и IP-адреса')
         return
@@ -290,9 +452,9 @@ export function ObjectEditorModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="monitoring-object-modal-title"
-        className="relative z-[1] w-full max-w-[32rem] overflow-hidden rounded-[1.25rem] border border-surface-border/90 bg-surface-card shadow-sheet"
+        className="relative z-[1] w-full max-w-[32rem] overflow-visible rounded-[1.25rem] border border-surface-border/90 bg-surface-card shadow-sheet"
       >
-        <header className="flex items-center justify-between gap-3 border-b border-surface-border/80 px-5 py-4">
+        <header className="flex items-center justify-between gap-3 rounded-t-[1.25rem] border-b border-surface-border/80 px-5 py-4">
           <h3 id="monitoring-object-modal-title" className="m-0 text-[17px] font-semibold tracking-tight text-label-primary">
             {isEdit ? 'Настройки объекта' : 'Добавить объект'}
           </h3>
@@ -308,36 +470,50 @@ export function ObjectEditorModal({
 
         <div className="px-5 py-5">
           <div className="flex items-start gap-3">
-            <label className="flex shrink-0 flex-col gap-2">
-              <span className="text-[13px] font-medium text-label-secondary">ID объекта</span>
-              <div
-                className={`flex h-[42px] items-center gap-2 rounded-xl border border-surface-border/90 bg-surface-input/80 px-2 shadow-chromeTop transition-[box-shadow,border-color] ${
-                  isEdit ? 'opacity-70' : 'focus-within:border-transparent focus-within:ring-2 focus-within:ring-tint-blue/50'
-                }`}
-              >
-                <span className="shrink-0 font-mono text-[14px] font-semibold text-tint-blue select-none">owl</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  autoFocus={!isEdit}
-                  readOnly={isEdit}
-                  aria-readonly={isEdit}
-                  maxLength={4}
-                  value={digits}
-                  onChange={(event) => {
-                    if (isEdit) return
-                    setDigits(sanitizeMonitoringDigits(event.target.value))
+            <div className="relative z-10 flex w-[8.75rem] shrink-0 flex-col gap-3">
+              <label className="flex flex-col gap-2">
+                <span className="text-[13px] font-medium text-label-secondary">ID объекта</span>
+                <div
+                  className={`flex h-[42px] items-center gap-2 rounded-xl border border-surface-border/90 bg-surface-input/80 px-2 shadow-chromeTop transition-[box-shadow,border-color] ${
+                    isEdit ? 'opacity-70' : 'focus-within:border-transparent focus-within:ring-2 focus-within:ring-tint-blue/50'
+                  }`}
+                >
+                  <span className="shrink-0 font-mono text-[14px] font-semibold text-tint-blue select-none">owl</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    autoFocus={!isEdit}
+                    readOnly={isEdit}
+                    aria-readonly={isEdit}
+                    maxLength={4}
+                    value={digits}
+                    onChange={(event) => {
+                      if (isEdit) return
+                      setDigits(sanitizeMonitoringDigits(event.target.value))
+                      setError(null)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') handleSave()
+                    }}
+                    placeholder="0000"
+                    className="min-w-0 flex-1 bg-transparent py-0 font-mono text-[16px] tracking-[0.12em] text-label-primary placeholder:text-label-tertiary/40 focus:outline-none read-only:cursor-default"
+                  />
+                </div>
+              </label>
+              <label className="flex flex-col gap-2">
+                <span className="whitespace-nowrap text-[13px] font-medium text-label-secondary">
+                  {`Тип: [БУ\u2009/\u2009ТКРС]`}
+                </span>
+                <KindSelect
+                  value={objectKind}
+                  onChange={(next) => {
+                    setObjectKind(next)
                     setError(null)
                   }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') handleSave()
-                  }}
-                  placeholder="0000"
-                  className="w-[3.5rem] shrink-0 bg-transparent py-0 font-mono text-[16px] tracking-[0.12em] text-label-primary placeholder:text-label-tertiary/40 focus:outline-none read-only:cursor-default"
                 />
-              </div>
-            </label>
+              </label>
+            </div>
 
             <div className="flex min-w-0 flex-1 flex-col gap-3">
               <div className="flex items-end gap-3">
@@ -426,7 +602,7 @@ export function ObjectEditorModal({
           {error && <p className="mt-4 m-0 text-[13px] text-red-300">{error}</p>}
         </div>
 
-        <footer className="flex justify-end gap-2 border-t border-surface-border/80 px-5 py-4">
+        <footer className="flex justify-end gap-2 rounded-b-[1.25rem] border-t border-surface-border/80 px-5 py-4">
           {isEdit && editor.objectId && (
             <button
               type="button"
