@@ -187,6 +187,15 @@ export function resolvePrimaryLocationName(locations?: MonitoringLocation[] | nu
   return locations.find((location) => location.id === bestParentId)?.localizedName ?? null
 }
 
+/** Location line under the OWL code on monitoring cards. */
+export function resolveObjectCardLocationName(
+  object: Pick<MonitoringObject, 'primaryLocationName' | 'locations'>
+): string | null {
+  const primary = object.primaryLocationName?.trim()
+  if (primary) return primary
+  return resolvePrimaryLocationName(object.locations) ?? null
+}
+
 function normalizeCameraStreams(value: unknown): MonitoringCameraStream[] | undefined {
   if (!Array.isArray(value)) return undefined
 

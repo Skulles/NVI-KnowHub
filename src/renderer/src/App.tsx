@@ -70,7 +70,11 @@ export default function App(): React.ReactElement {
       updateLifecycleStarted = true
       // Предыдущая сессия отложила установку — качаем тихо и ставим без тоста.
       if (autoInstallFromPreviousSession) {
-        void window.api?.startAppUpdateDownload()
+        void window.api?.startAppUpdateDownload().then((result) => {
+          if (!result.ok && result.error !== 'offline') {
+            setAppUpdateError(result.error ?? 'Не удалось загрузить обновление')
+          }
+        })
         return
       }
       setAppUpdateAvailable()

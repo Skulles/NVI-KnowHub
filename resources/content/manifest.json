@@ -1,5 +1,5 @@
 {
-  "version": 46,
+  "version": 50,
   "sections": [
     {
       "id": "instructions",
@@ -22,7 +22,30 @@
               "title": "LtAP mini LTE kit",
               "type": "article",
               "htmlFile": "ltap-mini-lte-kit.html",
-              "version": 18
+              "version": 20
+            }
+          ]
+        },
+        {
+          "id": "server",
+          "title": "Сервер",
+          "items": []
+        },
+        {
+          "id": "kamery",
+          "title": "Камеры",
+          "items": []
+        },
+        {
+          "id": "rupory",
+          "title": "Рупоры",
+          "items": [
+            {
+              "id": "article-1785266313538",
+              "title": "RepkaPI",
+              "type": "article",
+              "htmlFile": "repkapi.html",
+              "version": 1
             }
           ]
         }

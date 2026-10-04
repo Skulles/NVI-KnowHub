@@ -3,7 +3,8 @@
  * and notify the renderer over IPC.
  */
 import { autoUpdater } from 'electron-updater'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, net } from 'electron'
+
 import { logger } from './logger'
 import { installParallelUpdateDownloader } from './parallelDownload'
 
@@ -19,6 +20,22 @@ function send(channel: string, ...args: unknown[]): void {
   const window = targetWindow
   if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
   window.webContents.send(channel, ...args)
+}
+
+function isOfflineUpdateError(err: unknown): boolean {
+  if (!net.isOnline()) return true
+  const message = err instanceof Error ? `${err.name} ${err.message}` : String(err)
+  return /net::ERR_|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|offline|network|socket hang up|getaddrinfo/i.test(
+    message
+  )
+}
+
+function reportUpdateError(err: unknown): void {
+  logger.error('Updater error', err)
+  // Без сети тост только мешает: кнопки снова бьются в тот же недоступный сервер.
+  if (isOfflineUpdateError(err)) return
+  const message = err instanceof Error ? err.message : String(err)
+  send('app:update-error', message)
 }
 
 export function setupUpdater(window: BrowserWindow): void {
@@ -53,8 +70,7 @@ export function setupUpdater(window: BrowserWindow): void {
     })
 
     autoUpdater.on('error', (err) => {
-      logger.error('Updater error', err)
-      send('app:update-error', err.message)
+      reportUpdateError(err)
     })
 
     ipcMain.handle('app:start-update-download', async () => {
@@ -62,8 +78,11 @@ export function setupUpdater(window: BrowserWindow): void {
         await autoUpdater.downloadUpdate()
         return { ok: true as const }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
         logger.error('Update download failed', err)
+        if (isOfflineUpdateError(err)) {
+          return { ok: false as const, error: 'offline' }
+        }
+        const message = err instanceof Error ? err.message : String(err)
         return { ok: false as const, error: message }
       }
     })

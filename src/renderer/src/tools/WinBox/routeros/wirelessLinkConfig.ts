@@ -301,7 +301,7 @@ export function buildGrooveaLanBlock(options: {
       )
     } else {
       lines.push(
-        `/interface wireless set [find default-name=wlan1] disabled=no mode=station ${wirelessCommon} scan-list=${frequency} wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}"`,
+        `/interface wireless set [find default-name=wlan1] disabled=no mode=station-bridge ${wirelessCommon} scan-list=${frequency} wireless-protocol=nv2 ssid="${escapedSsid}" nv2-security=enabled nv2-preshared-key="${escapedKey}"`,
       )
     }
   } else if (role === 'ap') {
@@ -312,7 +312,7 @@ export function buildGrooveaLanBlock(options: {
   } else {
     lines.push(
       `/interface wireless security-profiles add name=groovea-link mode=dynamic-keys authentication-types=wpa2-psk wpa2-pre-shared-key="${escapedKey}"`,
-      `/interface wireless set [find default-name=wlan1] disabled=no mode=station ${wirelessCommon} scan-list=${frequency} wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link`,
+      `/interface wireless set [find default-name=wlan1] disabled=no mode=station-bridge ${wirelessCommon} scan-list=${frequency} wireless-protocol=802.11 ssid="${escapedSsid}" security-profile=groovea-link`,
     )
   }
 

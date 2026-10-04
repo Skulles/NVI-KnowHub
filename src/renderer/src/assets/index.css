@@ -738,6 +738,62 @@
   }
 }
 
+@keyframes monitoring-summary-enter-from-control {
+  from {
+    opacity: 0;
+    transform: translate(12px, 8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+.monitoring-summary-enter-from-control {
+  transform-origin: 100% 100%;
+  animation: monitoring-summary-enter-from-control 260ms ease-out both;
+}
+
+.monitoring-summary-enter-from-control--toolbar {
+  transform-origin: 100% 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitoring-summary-enter-from-control {
+    animation: none;
+  }
+}
+
+@keyframes monitoring-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.monitoring-card-motion-shell {
+  will-change: transform;
+}
+
+.monitoring-card-enter {
+  animation: monitoring-card-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitoring-card-enter {
+    animation: none;
+  }
+
+  .monitoring-card-motion-shell {
+    transition: none !important;
+    will-change: auto;
+  }
+}
+
 .knowhub-spinner {
   width: 1.75rem;
   height: 1.75rem;

@@ -13,7 +13,7 @@ import hornIconUrl from '../../../assets/monitoring/horn-icon.png'
 import {
   DEFAULT_SERVER_LOGIN,
   isValidIPv4,
-  resolvePrimaryLocationName,
+  resolveObjectCardLocationName,
   type MonitoringObject
 } from '../monitoringStorage'
 import { MONITORING_OBJECT_KIND_LABELS } from '../monitoringObjectKind'
@@ -63,7 +63,7 @@ function formatLatency(latencyMs: number): string {
 }
 function latencyTextClasses(latencyMs: number | null): string {
   if (latencyMs === null) return 'text-label-tertiary'
-  if (latencyMs <= 100) return 'text-emerald-400'
+  if (latencyMs <= 150) return 'text-emerald-400'
   if (latencyMs <= 300) return 'text-amber-300'
   return 'text-red-400'
 }
@@ -103,14 +103,18 @@ function Card({
       }`}
     >
       <header
-        className={`flex items-start justify-between gap-4 px-5 py-4 ${
-          compact ? 'pb-1 pt-2' : ''
+        className={`relative px-5 py-4 ${compact ? 'pb-1 pt-2' : ''} ${
+          action ? (compact ? 'pr-12' : 'pr-14') : ''
         }`}
       >
-        <h2 className="m-0 min-w-0 flex-1 text-[12px] font-semibold uppercase tracking-[0.09em] text-tint-blue">
+        <h2 className="m-0 min-w-0 text-[12px] font-semibold uppercase tracking-[0.09em] text-tint-blue">
           {title}
         </h2>
-        {action}
+        {action ? (
+          <div className={`absolute flex items-center gap-0 ${compact ? 'right-1 top-1' : 'right-1.5 top-1.5'}`}>
+            {action}
+          </div>
+        ) : null}
       </header>
       <div className={`px-5 pt-0 ${compact ? 'pb-3' : 'pb-5'}`}>
         {children}
@@ -1053,8 +1057,7 @@ export function MonitoringObjectCard({
     linkOnline,
     serverOnline
   )
-  const primaryLocationName =
-    object.primaryLocationName?.trim() || resolvePrimaryLocationName(object.locations) || null
+  const primaryLocationName = resolveObjectCardLocationName(object)
 
   return (
     <Card
@@ -1090,8 +1093,8 @@ export function MonitoringObjectCard({
             onClick={() => {
               void window.api?.openExternal(`http://${object.serverHost}`)
             }}
-            className={`flex shrink-0 items-center justify-center rounded-lg text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:bg-white/[0.05] hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 ${
-              compact ? 'h-6 w-6' : 'h-8 w-8'
+            className={`flex shrink-0 items-center justify-center rounded-md text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 ${
+              compact ? 'h-6 w-6' : 'h-7 w-7'
             }`}
             aria-label="Открыть сервер в браузере"
           >
@@ -1101,8 +1104,8 @@ export function MonitoringObjectCard({
             <button
               type="button"
               onClick={() => onEdit(object.id)}
-              className={`flex shrink-0 items-center justify-center rounded-lg text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:bg-white/[0.05] hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 ${
-                compact ? 'h-6 w-6' : 'h-8 w-8'
+              className={`flex shrink-0 items-center justify-center rounded-md text-label-tertiary opacity-0 transition-[opacity,color] duration-150 hover:text-label-primary group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 ${
+                compact ? 'h-6 w-6' : 'h-7 w-7'
               }`}
               aria-label="Настройки объекта"
             >

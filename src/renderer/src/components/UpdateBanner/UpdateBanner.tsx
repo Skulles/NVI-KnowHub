@@ -130,9 +130,7 @@ function AppUpdateCenterToast(): React.ReactElement | null {
   const active =
     !appUpdateDismissed &&
     !appUpdateDownloading &&
-    (!!appUpdateError ||
-      appUpdateDownloaded ||
-      (appUpdateAvailable && !appUpdateDownloading))
+    (!!appUpdateError || appUpdateDownloaded || (appUpdateAvailable && !appUpdateDownloading))
 
   const show = active || leaving
 
@@ -164,7 +162,7 @@ function AppUpdateCenterToast(): React.ReactElement | null {
     void (async () => {
       if (!window.api) return
       const result = await window.api.startAppUpdateDownload()
-      if (!result.ok) {
+      if (!result.ok && result.error !== 'offline') {
         setAppUpdateError(result.error ?? 'Не удалось загрузить обновление')
       }
     })()
@@ -186,7 +184,7 @@ function AppUpdateCenterToast(): React.ReactElement | null {
     beginAppUpdateDownload({ silent: false })
     void (async () => {
       const result = await window.api!.startAppUpdateDownload()
-      if (!result.ok) {
+      if (!result.ok && result.error !== 'offline') {
         setAppUpdateError(result.error ?? 'Не удалось загрузить обновление')
       }
     })()
@@ -211,7 +209,7 @@ function AppUpdateCenterToast(): React.ReactElement | null {
     beginAppUpdateDownload({ silent: false })
     void (async () => {
       const result = await window.api!.startAppUpdateDownload()
-      if (!result.ok) {
+      if (!result.ok && result.error !== 'offline') {
         setAppUpdateError(result.error ?? 'Не удалось загрузить обновление')
       }
     })()

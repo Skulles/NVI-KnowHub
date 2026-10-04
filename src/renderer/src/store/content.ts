@@ -47,6 +47,14 @@ const TOOLS_SECTION: Section = {
       version: 1
     },
     {
+      id: 'network-discovery',
+      title: 'Поиск устройств в сети',
+      type: 'tool',
+      toolId: 'network-discovery',
+      icon: 'search',
+      version: 1
+    },
+    {
       id: 'fuel-calculator',
       title: 'Расчёт расхода топлива',
       type: 'tool',

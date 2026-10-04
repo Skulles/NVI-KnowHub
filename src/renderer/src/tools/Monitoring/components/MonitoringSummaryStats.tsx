@@ -182,18 +182,27 @@ function KindStatsCard({
 export function MonitoringSummaryStats({
   groups,
   selected,
-  onSelect
+  onSelect,
+  enterAnimated = false
 }: {
   groups: KindHealthGroup[]
   selected: SummaryHealthFilter | null
   onSelect: (filter: SummaryHealthFilter) => void
+  /** Play open animation (toolbar toggle only — not tab restore). */
+  enterAnimated?: boolean
 }) {
   if (groups.length === 0) return null
 
   return (
     <div className="mb-4 flex flex-wrap items-start justify-center gap-3" aria-label="Сводная статистика">
-      {groups.map((group) => (
-        <KindStatsCard key={group.kind} group={group} selected={selected} onSelect={onSelect} />
+      {groups.map((group, index) => (
+        <div
+          key={group.kind}
+          className={enterAnimated ? 'monitoring-summary-enter-from-control' : undefined}
+          style={enterAnimated ? { animationDelay: `${index * 40}ms` } : undefined}
+        >
+          <KindStatsCard group={group} selected={selected} onSelect={onSelect} />
+        </div>
       ))}
     </div>
   )

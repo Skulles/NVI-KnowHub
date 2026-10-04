@@ -34,7 +34,17 @@ import {
   MonitoringObjectCard
 } from './components/MonitoringObjectCard'
 import { MetricHoverTooltip } from './components/MonitoringMetricStatus'
+import {
+  MonitoringCardMotionShell,
+  MonitoringCardsMotionLayout
+} from './components/MonitoringCardsMotionLayout'
+import { MonitoringLocationFilterSelect } from './components/MonitoringLocationFilterSelect'
 import { MonitoringSummaryStats } from './components/MonitoringSummaryStats'
+import { MonitoringToolbarSeparator } from './components/MonitoringToolbarSeparator'
+import {
+  buildOeLocationFilterOptions,
+  objectMatchesOeLocationFilter
+} from './monitoringLocationFilter'
 import { recentPacketLossPercent } from './monitoringSchedule'
 import { useMonitoringProbes } from './hooks/useMonitoringProbes'
 
@@ -176,7 +186,9 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
       return false
     }
   })
+  const [summaryStatsEnterAnimated, setSummaryStatsEnterAnimated] = useState(false)
   const [summaryFilter, setSummaryFilter] = useState<SummaryHealthFilter | null>(null)
+  const [locationFilter, setLocationFilter] = useState<string | null>(null)
   const [editor, setEditor] = useState<EditorState>(null)
   const {
     results,
@@ -267,9 +279,18 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
     snapshot.objects
   ])
 
+  const objectsMatchingLocationFilter = useMemo(
+    () =>
+      locationFilter
+        ? snapshot.objects.filter((object) => objectMatchesOeLocationFilter(object, locationFilter))
+        : snapshot.objects,
+    [locationFilter, snapshot.objects]
+  )
+
   const summaryGroups = useMemo(
-    () => (summaryStatsOpen ? groupHealthByObjectKind(snapshot.objects, healthById) : []),
-    [healthById, snapshot.objects, summaryStatsOpen]
+    () =>
+      summaryStatsOpen ? groupHealthByObjectKind(objectsMatchingLocationFilter, healthById) : [],
+    [healthById, objectsMatchingLocationFilter, summaryStatsOpen]
   )
 
   const sortedObjects = useMemo(() => {
@@ -281,14 +302,40 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
     return [active, ...sorted]
   }, [lanActiveObjectId, snapshot.objects])
 
+  const locationFilterOptions = useMemo(
+    () => buildOeLocationFilterOptions(snapshot.objects),
+    [snapshot.objects]
+  )
+
+  useEffect(() => {
+    if (!locationFilter) return
+    if (!locationFilterOptions.some((option) => option.label === locationFilter)) {
+      setLocationFilter(null)
+    }
+  }, [locationFilter, locationFilterOptions])
+
   const visibleObjects = useMemo(() => {
-    if (!summaryFilter) return sortedObjects
     return sortedObjects.filter((object) => {
+      if (!objectMatchesOeLocationFilter(object, locationFilter)) return false
+      if (!summaryFilter) return true
       if (object.objectKind !== summaryFilter.kind) return false
       if (!summaryFilter.health) return true
       return healthById[object.id] === summaryFilter.health
     })
-  }, [healthById, sortedObjects, summaryFilter])
+  }, [healthById, locationFilter, sortedObjects, summaryFilter])
+
+  const visibleObjectIdsKey = useMemo(
+    () => visibleObjects.map((object) => object.id).join('\u0001'),
+    [visibleObjects]
+  )
+
+  const toggleSummaryStats = useCallback((): void => {
+    setSummaryStatsOpen((prev) => {
+      if (prev) setSummaryStatsEnterAnimated(false)
+      else setSummaryStatsEnterAnimated(true)
+      return !prev
+    })
+  }, [])
 
   const selectSummaryFilter = useCallback((filter: SummaryHealthFilter): void => {
     setSummaryFilter((prev) =>
@@ -302,52 +349,47 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
 
   const saveObject = useCallback(
     (next: MonitoringObject, originalId?: string): boolean => {
-      const prev = snapshot
-      let nextObjects: MonitoringObject[] | null = null
+      let saved = false
 
-      if (originalId) {
-        nextObjects = prev.objects.map((object) => {
-          if (object.id !== originalId) return object
-          // Keep cached OWL.Guard data only when host + login + password are unchanged.
-          // Otherwise a wrong password would keep the old version and leave the server status green.
-          const sameCredentials =
-            object.serverHost === next.serverHost &&
-            object.serverLogin === next.serverLogin &&
-            object.serverPassword === next.serverPassword
-          return applyResolvedObjectKind({
-            ...next,
-            id: originalId,
-            code: object.code,
-            objectKind: next.objectKind,
-            ...(sameCredentials && object.serverVersion ? { serverVersion: object.serverVersion } : {}),
-            ...(sameCredentials && object.primaryLocationName
-              ? { primaryLocationName: object.primaryLocationName }
-              : {}),
-            ...(sameCredentials && object.cameraStreams
-              ? {
-                  cameraStreams: object.cameraStreams,
-                  camerasTotal: object.camerasTotal ?? object.cameraStreams.length,
-                  ...(object.camerasOnline !== undefined ? { camerasOnline: object.camerasOnline } : {}),
-                  ...(object.camerasOnlineIds !== undefined
-                    ? { camerasOnlineIds: object.camerasOnlineIds }
-                    : {})
-                }
-              : {}),
-            ...(sameCredentials && object.locations?.length ? { locations: object.locations } : {}),
-            ...(sameCredentials && object.megaphones?.length
-              ? {
-                  megaphones: object.megaphones,
-                  megaphonesTotal: object.megaphonesTotal ?? object.megaphones.length,
-                  ...(object.megaphonesOnline !== undefined
-                    ? { megaphonesOnline: object.megaphonesOnline }
-                    : {}),
-                  ...(object.megaphonesOnlineIds !== undefined
-                    ? { megaphonesOnlineIds: object.megaphonesOnlineIds }
-                    : {})
-                }
-              : sameCredentials && object.megaphonesTotal !== undefined
+      setSnapshot((prev) => {
+        if (originalId) {
+          if (!prev.objects.some((object) => object.id === originalId)) {
+            return prev
+          }
+
+          saved = true
+          const nextObjects = prev.objects.map((object) => {
+            if (object.id !== originalId) return object
+            // Keep cached OWL.Guard data only when host + login + password are unchanged.
+            // Otherwise a wrong password would keep the old version and leave the server status green.
+            const sameCredentials =
+              object.serverHost === next.serverHost &&
+              object.serverLogin === next.serverLogin &&
+              object.serverPassword === next.serverPassword
+            return applyResolvedObjectKind({
+              ...next,
+              id: originalId,
+              code: object.code,
+              objectKind: next.objectKind,
+              ...(sameCredentials && object.serverVersion ? { serverVersion: object.serverVersion } : {}),
+              ...(sameCredentials && object.primaryLocationName
+                ? { primaryLocationName: object.primaryLocationName }
+                : {}),
+              ...(sameCredentials && object.cameraStreams
                 ? {
-                    megaphonesTotal: object.megaphonesTotal,
+                    cameraStreams: object.cameraStreams,
+                    camerasTotal: object.camerasTotal ?? object.cameraStreams.length,
+                    ...(object.camerasOnline !== undefined ? { camerasOnline: object.camerasOnline } : {}),
+                    ...(object.camerasOnlineIds !== undefined
+                      ? { camerasOnlineIds: object.camerasOnlineIds }
+                      : {})
+                  }
+                : {}),
+              ...(sameCredentials && object.locations?.length ? { locations: object.locations } : {}),
+              ...(sameCredentials && object.megaphones?.length
+                ? {
+                    megaphones: object.megaphones,
+                    megaphonesTotal: object.megaphonesTotal ?? object.megaphones.length,
                     ...(object.megaphonesOnline !== undefined
                       ? { megaphonesOnline: object.megaphonesOnline }
                       : {}),
@@ -355,31 +397,46 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
                       ? { megaphonesOnlineIds: object.megaphonesOnlineIds }
                       : {})
                   }
-                : {}),
-            ...(sameCredentials && object.guardDevices
-              ? {
-                  guardDevices: object.guardDevices,
-                  ...(object.devicesOnline !== undefined ? { devicesOnline: object.devicesOnline } : {}),
-                  ...(object.devicesOnlineIds !== undefined
-                    ? { devicesOnlineIds: object.devicesOnlineIds }
-                    : {})
-                }
-              : {})
+                : sameCredentials && object.megaphonesTotal !== undefined
+                  ? {
+                      megaphonesTotal: object.megaphonesTotal,
+                      ...(object.megaphonesOnline !== undefined
+                        ? { megaphonesOnline: object.megaphonesOnline }
+                        : {}),
+                      ...(object.megaphonesOnlineIds !== undefined
+                        ? { megaphonesOnlineIds: object.megaphonesOnlineIds }
+                        : {})
+                    }
+                  : {}),
+              ...(sameCredentials && object.guardDevices
+                ? {
+                    guardDevices: object.guardDevices,
+                    ...(object.devicesOnline !== undefined ? { devicesOnline: object.devicesOnline } : {}),
+                    ...(object.devicesOnlineIds !== undefined
+                      ? { devicesOnlineIds: object.devicesOnlineIds }
+                      : {})
+                  }
+                : {})
+            })
           })
-        })
-      } else if (prev.objects.some((object) => object.id === next.id)) {
-        return false
-      } else {
-        nextObjects = [...prev.objects, applyResolvedObjectKind(next)]
-      }
+          return { objects: [...nextObjects].sort(compareMonitoringObjectsByDigits) }
+        }
 
-      setSnapshot({ objects: [...nextObjects].sort(compareMonitoringObjectsByDigits) })
+        if (prev.objects.some((object) => object.id === next.id)) return prev
+
+        saved = true
+        return {
+          objects: [...prev.objects, applyResolvedObjectKind(next)].sort(compareMonitoringObjectsByDigits)
+        }
+      })
+
+      if (!saved) return false
 
       clearObjectResults(originalId ?? next.id)
-
+      if (!originalId) setLocationFilter(null)
       return true
     },
-    [clearObjectResults, snapshot]
+    [clearObjectResults]
   )
 
   const deleteObject = useCallback(
@@ -433,30 +490,44 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
         onDelete={deleteObject}
       />
 
+      {summaryStatsOpen ? (
+        <MonitoringSummaryStats
+          groups={summaryGroups}
+          selected={summaryFilter}
+          onSelect={selectSummaryFilter}
+          enterAnimated={summaryStatsEnterAnimated}
+        />
+      ) : null}
+
       <div className="mb-2 flex items-center justify-between gap-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <ToolbarIconButton
-            type="button"
-            hint="Сводная статистика"
-            onClick={() => setSummaryStatsOpen((prev) => !prev)}
-            aria-label="Сводная статистика"
-            aria-pressed={summaryStatsOpen}
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
-              summaryStatsOpen ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
-            }`}
-          >
-            <SummaryStatsIcon />
-          </ToolbarIconButton>
+        <div className="flex min-w-0 items-center gap-1">
+          <MonitoringLocationFilterSelect
+            options={locationFilterOptions}
+            totalCount={snapshot.objects.length}
+            value={locationFilter}
+            onChange={setLocationFilter}
+          />
+          {summaryStatsOpen && locationFilterOptions.length > 0 ? (
+            <MonitoringToolbarSeparator />
+          ) : null}
           {summaryStatsOpen ? (
-            <>
-              <span className="min-w-0 truncate text-[12px] font-medium text-label-secondary">
+            <div
+              className={`flex min-w-0 items-center gap-1.5${
+                summaryStatsEnterAnimated
+                  ? ' monitoring-summary-enter-from-control monitoring-summary-enter-from-control--toolbar'
+                  : ''
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-0.5 truncate text-[12px] font-medium text-label-secondary">
                 {summaryFilter ? (
                   <>
-                    {MONITORING_OBJECT_KIND_SUMMARY_LABELS[summaryFilter.kind]}
+                    <span className="truncate">
+                      {MONITORING_OBJECT_KIND_SUMMARY_LABELS[summaryFilter.kind]}
+                    </span>
                     {summaryFilter.health ? (
                       <>
-                        <span className="text-label-tertiary"> · </span>
-                        <span className={HEALTH_COLORS[summaryFilter.health]}>
+                        <MonitoringToolbarSeparator />
+                        <span className={`truncate ${HEALTH_COLORS[summaryFilter.health]}`}>
                           {HEALTH_LABELS[summaryFilter.health]}
                         </span>
                       </>
@@ -472,12 +543,12 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
                   hint="Сбросить"
                   onClick={() => setSummaryFilter(null)}
                   aria-label="Сбросить фильтр"
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-label-tertiary transition-colors hover:bg-white/[0.06] hover:text-label-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-label-tertiary transition-colors hover:text-label-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60"
                 >
                   <XMarkIcon className="h-3.5 w-3.5" />
                 </ToolbarIconButton>
               ) : null}
-            </>
+            </div>
           ) : null}
         </div>
         <div className="flex items-center gap-1">
@@ -492,6 +563,22 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
           >
             <ArrowPathIcon className={`h-4 w-4 ${manualRefreshLoading ? 'animate-spin' : ''}`} />
           </ToolbarIconButton>
+          <ToolbarIconButton
+            type="button"
+            hint="Сводная статистика"
+            onClick={toggleSummaryStats}
+            aria-label="Сводная статистика"
+            aria-pressed={summaryStatsOpen}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
+              summaryStatsOpen ? 'text-tint-blue' : 'hover:text-label-secondary'
+            }`}
+          >
+            <SummaryStatsIcon />
+          </ToolbarIconButton>
+          <span
+            aria-hidden
+            className="mx-0.5 h-4 w-px shrink-0 rounded-full bg-surface-border"
+          />
           <div
             className="flex items-center gap-0.5"
             role="group"
@@ -504,7 +591,7 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
               aria-label="Карточки"
               aria-pressed={viewMode === 'cards'}
               className={`flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
-                viewMode === 'cards' ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
+                viewMode === 'cards' ? 'text-tint-blue' : 'hover:text-label-secondary'
               }`}
             >
               <CardsViewIcon />
@@ -516,7 +603,7 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
               aria-label="Табличный вид"
               aria-pressed={viewMode === 'table'}
               className={`flex h-6 w-6 items-center justify-center rounded text-label-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/60 ${
-                viewMode === 'table' ? 'bg-white/[0.06] text-tint-blue' : 'hover:text-label-secondary'
+                viewMode === 'table' ? 'text-tint-blue' : 'hover:text-label-secondary'
               }`}
             >
               <TableViewIcon />
@@ -525,72 +612,71 @@ export function Monitoring({ screenActive = true }: { screenActive?: boolean }) 
         </div>
       </div>
 
-      {summaryStatsOpen ? (
-        <MonitoringSummaryStats
-          groups={summaryGroups}
-          selected={summaryFilter}
-          onSelect={selectSummaryFilter}
-        />
-      ) : null}
-
-      <div className={`grid ${viewMode === 'table' ? 'gap-3' : 'gap-4 lg:grid-cols-2'}`}>
+      <MonitoringCardsMotionLayout
+        itemKey={visibleObjectIdsKey}
+        layoutKey={viewMode}
+        className={`grid ${viewMode === 'table' ? 'gap-3' : 'gap-4 lg:grid-cols-2'}`}
+      >
         {SHOW_MONITORING_DEBUG_CARD ? (
           <MonitoringDebugObjectCard now={uiClock} compact={viewMode === 'table'} />
         ) : null}
         {visibleObjects.map((object) => (
-          <MonitoringObjectCard
-            key={object.id}
-            object={object}
-            results={results}
-            latencyHistory={latencyHistory}
-            linkPacketLossPercent={recentPacketLossPercent(
-              linkStatusHistory[targetId(object.id, 'link')]
-            )}
-            linkUnstable={Boolean(linkUnstableFlags[targetId(object.id, 'link')])}
-            checkingLink={Boolean(linkChecking[object.id])}
-            checkingServer={Boolean(serverChecking[object.id])}
-            serverVersion={object.serverVersion ?? null}
-            serverVersionError={serverVersionErrors[object.id] ?? null}
-            serverResources={{
-              ...EMPTY_SERVER_RESOURCES,
-              cpuLoad: cpuLoads[object.id] ?? null,
-              cpuTempC: cpuTemps[object.id] ?? null,
-              gpuLoad: gpuLoads[object.id] ?? null,
-              gpuTempC: gpuTemps[object.id] ?? null,
-              ramLoad: ramLoads[object.id] ?? null,
-              loading:
-                Boolean(serverResourcesLoading[object.id]) &&
-                cpuLoads[object.id] == null &&
-                gpuLoads[object.id] == null &&
-                ramLoads[object.id] == null
-            }}
-            camerasPreviewLoading={Boolean(camerasPreviewLoading[object.id])}
-            megaphonesStatusLoading={Boolean(megaphonesStatusLoading[object.id])}
-            camerasMetricFailed={Boolean(camerasMetricFailed[object.id])}
-            megaphonesMetricFailed={Boolean(megaphonesMetricFailed[object.id])}
-            sensorsRefreshLoading={Boolean(sensorsRefreshLoading[object.id])}
-            now={uiClock}
-            onEdit={openEditEditor}
-            onRefreshMetric={
-              SHOW_MONITORING_DEBUG_CARD || (lanActiveObjectId && lanActiveObjectId !== object.id)
-                ? undefined
-                : refreshMetricBlock
-            }
-            probePaused={
-              SHOW_MONITORING_DEBUG_CARD ||
-              Boolean(lanActiveObjectId && lanActiveObjectId !== object.id)
-            }
-            lanActive={!SHOW_MONITORING_DEBUG_CARD && lanActiveObjectId === object.id}
-            compact={viewMode === 'table'}
-          />
+          <MonitoringCardMotionShell key={object.id} objectId={object.id}>
+            <MonitoringObjectCard
+              object={object}
+              results={results}
+              latencyHistory={latencyHistory}
+              linkPacketLossPercent={recentPacketLossPercent(
+                linkStatusHistory[targetId(object.id, 'link')]
+              )}
+              linkUnstable={Boolean(linkUnstableFlags[targetId(object.id, 'link')])}
+              checkingLink={Boolean(linkChecking[object.id])}
+              checkingServer={Boolean(serverChecking[object.id])}
+              serverVersion={object.serverVersion ?? null}
+              serverVersionError={serverVersionErrors[object.id] ?? null}
+              serverResources={{
+                ...EMPTY_SERVER_RESOURCES,
+                cpuLoad: cpuLoads[object.id] ?? null,
+                cpuTempC: cpuTemps[object.id] ?? null,
+                gpuLoad: gpuLoads[object.id] ?? null,
+                gpuTempC: gpuTemps[object.id] ?? null,
+                ramLoad: ramLoads[object.id] ?? null,
+                loading:
+                  Boolean(serverResourcesLoading[object.id]) &&
+                  cpuLoads[object.id] == null &&
+                  gpuLoads[object.id] == null &&
+                  ramLoads[object.id] == null
+              }}
+              camerasPreviewLoading={Boolean(camerasPreviewLoading[object.id])}
+              megaphonesStatusLoading={Boolean(megaphonesStatusLoading[object.id])}
+              camerasMetricFailed={Boolean(camerasMetricFailed[object.id])}
+              megaphonesMetricFailed={Boolean(megaphonesMetricFailed[object.id])}
+              sensorsRefreshLoading={Boolean(sensorsRefreshLoading[object.id])}
+              now={uiClock}
+              onEdit={openEditEditor}
+              onRefreshMetric={
+                SHOW_MONITORING_DEBUG_CARD || (lanActiveObjectId && lanActiveObjectId !== object.id)
+                  ? undefined
+                  : refreshMetricBlock
+              }
+              probePaused={
+                SHOW_MONITORING_DEBUG_CARD ||
+                Boolean(lanActiveObjectId && lanActiveObjectId !== object.id)
+              }
+              lanActive={!SHOW_MONITORING_DEBUG_CARD && lanActiveObjectId === object.id}
+              compact={viewMode === 'table'}
+            />
+          </MonitoringCardMotionShell>
         ))}
-      </div>
+      </MonitoringCardsMotionLayout>
 
       {visibleObjects.length === 0 && (
         <p className="mt-6 text-center text-[15px] font-medium text-label-secondary">
           {snapshot.objects.length === 0
             ? 'Нет объектов для отслеживания'
-            : 'Нет объектов с таким статусом'}
+            : locationFilter
+              ? 'Нет объектов с такой локацией'
+              : 'Нет объектов с таким статусом'}
         </p>
       )}
     </article>

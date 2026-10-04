@@ -4,11 +4,13 @@
 import React from 'react'
 import { FuelCalculator } from './FuelCalculator/FuelCalculator'
 import { Monitoring } from './Monitoring/Monitoring'
+import { NetworkDiscovery } from './NetworkDiscovery/NetworkDiscovery'
 import { WinBox } from './WinBox/WinBox'
 
 const registry: Record<string, React.ComponentType> = {
   'fuel-calculator': FuelCalculator,
   'monitoring': Monitoring,
+  'network-discovery': NetworkDiscovery,
   'winbox': WinBox
 }
 

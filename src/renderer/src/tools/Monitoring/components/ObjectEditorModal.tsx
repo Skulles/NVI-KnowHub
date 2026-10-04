@@ -352,9 +352,11 @@ export function ObjectEditorModal({
   const [serverPassword, setServerPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const saveInFlightRef = useRef(false)
 
   useEffect(() => {
     if (!editor) {
+      saveInFlightRef.current = false
       setDigits('')
       setObjectKind(DEFAULT_OBJECT_KIND)
       setLinkHost('')
@@ -410,6 +412,14 @@ export function ObjectEditorModal({
   if (!editor) return null
 
   const handleSave = (): void => {
+    if (saveInFlightRef.current) return
+    saveInFlightRef.current = true
+
+    const abortSave = (message: string): void => {
+      saveInFlightRef.current = false
+      setError(message)
+    }
+
     let next: MonitoringObject | null = null
     if (isEdit && object) {
       next = buildMonitoringObject(
@@ -421,25 +431,25 @@ export function ObjectEditorModal({
         objectKind
       )
       if (!next) {
-        setError('Проверьте IP-адреса')
+        abortSave('Проверьте IP-адреса')
         return
       }
       next = { ...next, id: object.id, code: object.code }
     } else {
       if (digits.length !== 4) {
-        setError('Введите 4 цифры ID объекта')
+        abortSave('Введите 4 цифры ID объекта')
         return
       }
       next = buildMonitoringObject(digits, linkHost, serverHost, serverLogin, serverPassword, objectKind)
       if (!next) {
-        setError('Проверьте ID и IP-адреса')
+        abortSave('Проверьте ID и IP-адреса')
         return
       }
     }
 
     const saved = onSave(next, isEdit ? editor.objectId : undefined)
     if (!saved) {
-      setError(isEdit ? 'Не удалось сохранить объект' : 'Этот объект уже добавлен')
+      abortSave(isEdit ? 'Не удалось сохранить объект' : 'Этот объект уже добавлен')
       return
     }
     onClose()

@@ -205,6 +205,7 @@ export function ConfigGeneratorModal({
     handleSave,
     handleCopy,
   } = actions;
+  const fieldsLocked = !/^\d{4}$/.test(owlDigits);
   return open
     ? createPortal(
         <div
@@ -364,6 +365,7 @@ export function ConfigGeneratorModal({
                                       <IpOctetInput
                                         plain
                                         compact
+                                        disabled={fieldsLocked}
                                         value={octet}
                                         inputRef={(el) => {
                                           grooveaIpInputRefs[rowIndex][
@@ -395,6 +397,7 @@ export function ConfigGeneratorModal({
                                   <IpOctetInput
                                     plain
                                     compact
+                                    disabled={fieldsLocked}
                                     value={
                                       linkHostSuffixesState[rowIndex] ?? ""
                                     }
@@ -432,6 +435,7 @@ export function ConfigGeneratorModal({
                                 <IpOctetInput
                                   plain
                                   compact
+                                  disabled={fieldsLocked}
                                   value={octet}
                                   inputRef={(el) => {
                                     ipInputRefs[i].current = el;
@@ -483,6 +487,7 @@ export function ConfigGeneratorModal({
                       lanAddressFromOwl &&
                       lanAddress?.ip !== lanAddressFromOwl.ip && (
                         <HintLink
+                          disabled={fieldsLocked}
                           onClick={() => {
                             const octets = ipToOctets(lanAddressFromOwl.ip);
                             if (octets) setIpOctets(octets);
@@ -496,6 +501,7 @@ export function ConfigGeneratorModal({
                       grooveaPrefixOctets.join(".") !==
                         grooveaPrefixFromOwl.join(".") && (
                         <HintLink
+                          disabled={fieldsLocked}
                           onClick={() =>
                             setGrooveaPrefixOctets(grooveaPrefixFromOwl)
                           }
@@ -505,6 +511,7 @@ export function ConfigGeneratorModal({
                         </HintLink>
                       )}
                     {!isGroovea &&
+                      !fieldsLocked &&
                       ipOctets.some((o) => o.trim() !== "") &&
                       !isValidIp && (
                         <FormAlert tone="warning">
@@ -512,6 +519,7 @@ export function ConfigGeneratorModal({
                         </FormAlert>
                       )}
                     {isGroovea &&
+                      !fieldsLocked &&
                       grooveaPrefixOctets.some((o) => o.trim() !== "") &&
                       !isValidIp && (
                         <FormAlert tone="warning">
@@ -527,15 +535,17 @@ export function ConfigGeneratorModal({
                         type="text"
                         autoComplete="new-password"
                         value={newPassword}
+                        disabled={fieldsLocked}
                         onChange={(e) => setNewPassword(e.target.value)}
                         placeholder="Сгенерируйте или введите пароль"
-                        className={`${fieldControlClass} min-w-0 flex-1 text-[15px] placeholder:text-label-tertiary/40`}
+                        className={`${fieldControlClass} min-w-0 flex-1 text-[15px] placeholder:text-label-tertiary/40 disabled:cursor-not-allowed disabled:opacity-40`}
                       />
                       <button
                         type="button"
+                        disabled={fieldsLocked}
                         onClick={generateAdminPassword}
                         title="Сгенерировать пароль"
-                        className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                        className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-label-secondary"
                         aria-label="Сгенерировать пароль"
                       >
                         <DiceIcon className="h-4 w-4" />
@@ -551,13 +561,14 @@ export function ConfigGeneratorModal({
                           type="text"
                           autoComplete="off"
                           value={grooveaSsid}
+                          disabled={fieldsLocked}
                           onChange={(e) => {
                             setGrooveaSsidEdited(true);
                             setGrooveaSsid(e.target.value);
                           }}
                           onBlur={() => setGrooveaSsid((s) => s.trim())}
                           placeholder={`owl0000-${deviceNameSlug || "device"}`}
-                          className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                          className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40 disabled:cursor-not-allowed disabled:opacity-40`}
                         />
                       </div>
 
@@ -568,19 +579,21 @@ export function ConfigGeneratorModal({
                             type="text"
                             autoComplete="off"
                             value={linkKey}
+                            disabled={fieldsLocked}
                             onChange={(e) => setLinkKey(e.target.value)}
                             placeholder={
                               isPairLinkStack(deviceWirelessStack)
                                 ? "Одинаковый на AP и Station"
                                 : "Одинаковый на AP и станциях"
                             }
-                            className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                            className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40 disabled:cursor-not-allowed disabled:opacity-40`}
                           />
                           <button
                             type="button"
+                            disabled={fieldsLocked}
                             onClick={() => setLinkKey(generatePassword())}
                             title="Сгенерировать пароль"
-                            className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                            className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-label-secondary"
                             aria-label="Сгенерировать пароль"
                           >
                             <DiceIcon className="h-4 w-4" />
@@ -596,6 +609,7 @@ export function ConfigGeneratorModal({
                         label="Включить WiFi"
                         checked={wifiEnabled}
                         onChange={toggleWifi}
+                        disabled={fieldsLocked}
                       />
 
                       <div
@@ -615,6 +629,7 @@ export function ConfigGeneratorModal({
                                   type="text"
                                   autoComplete="off"
                                   value={wifiSsid}
+                                  disabled={fieldsLocked}
                                   onChange={(e) => {
                                     setWifiSsidEdited(true);
                                     setWifiSsid(
@@ -625,7 +640,7 @@ export function ConfigGeneratorModal({
                                     setWifiSsid((ssid) => ssid.trim())
                                   }
                                   placeholder="owl0000"
-                                  className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                                  className={`${fieldControlClass} h-[42px] py-0 text-[15px] placeholder:text-label-tertiary/40 disabled:cursor-not-allowed disabled:opacity-40`}
                                 />
                               </div>
 
@@ -636,17 +651,19 @@ export function ConfigGeneratorModal({
                                     type="text"
                                     autoComplete="new-password"
                                     value={wifiPassword}
+                                    disabled={fieldsLocked}
                                     onChange={(e) =>
                                       setWifiPassword(e.target.value)
                                     }
                                     placeholder="Пароль для подключения"
-                                    className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40`}
+                                    className={`${fieldControlClass} h-[42px] min-w-0 flex-1 py-0 text-[15px] placeholder:text-label-tertiary/40 disabled:cursor-not-allowed disabled:opacity-40`}
                                   />
                                   <button
                                     type="button"
+                                    disabled={fieldsLocked}
                                     onClick={generateWifiPassword}
                                     title="Сгенерировать пароль"
-                                    className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+                                    className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg bg-surface-input/80 text-label-secondary shadow-chromeTop transition-colors hover:text-tint-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-label-secondary"
                                     aria-label="Сгенерировать пароль WiFi"
                                   >
                                     <DiceIcon className="h-4 w-4" />
@@ -659,6 +676,7 @@ export function ConfigGeneratorModal({
                               label="Скрытая сеть"
                               checked={wifiHidden}
                               onChange={() => setWifiHidden((v) => !v)}
+                              disabled={fieldsLocked}
                             />
                           </div>
                         </div>
@@ -673,6 +691,7 @@ export function ConfigGeneratorModal({
                       band={grooveaWirelessBand}
                       onProtocolChange={setGrooveaWirelessProtocol}
                       onBandChange={setGrooveaWirelessBand}
+                      disabled={fieldsLocked}
                     />
                   ) : (
                     <p className="m-0 text-[13px] leading-relaxed text-label-tertiary">

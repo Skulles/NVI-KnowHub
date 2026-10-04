@@ -45,12 +45,12 @@ function SectionItem({ item, onSelect, isSelected }: {
   )
 }
 
-function SubsectionBlock({ subsection, selectedId, onSelect, isFirst, mutedHeader = false }: {
+function SubsectionBlock({ subsection, selectedId, onSelect, isFirst, accentHeader = false }: {
   subsection: Subsection
   selectedId: string | null
   onSelect: (item: ContentItem) => void
   isFirst: boolean
-  mutedHeader?: boolean
+  accentHeader?: boolean
 }): React.ReactElement {
   const [collapsed, setCollapsed] = React.useState(false)
 
@@ -60,14 +60,14 @@ function SubsectionBlock({ subsection, selectedId, onSelect, isFirst, mutedHeade
         type="button"
         onClick={() => setCollapsed((c) => !c)}
         className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] transition-colors duration-150 ${focusRow} ${
-          mutedHeader
-            ? 'font-normal text-label-tertiary/75 hover:bg-white/[0.04] hover:text-label-tertiary'
+          accentHeader
+            ? 'font-medium text-tint-blue opacity-[0.68] hover:bg-tint-blue/10 hover:opacity-[0.88]'
             : 'font-medium text-label-secondary hover:bg-white/[0.05] hover:text-label-primary'
         }`}
       >
         <ChevronRightIcon
           className={`w-3 h-3 flex-shrink-0 transition-transform duration-200 ease-out ${collapsed ? '' : 'rotate-90'} ${
-            mutedHeader ? 'opacity-40' : 'opacity-60'
+            accentHeader ? 'currentColor' : 'opacity-60'
           }`}
         />
         <span className="flex-1 text-left leading-snug">{subsection.title}</span>
@@ -119,7 +119,7 @@ function SectionGroup({ section, selectedId, onSelect }: {
               selectedId={selectedId}
               onSelect={onSelect}
               isFirst={i === 0}
-              mutedHeader={section.id === INSTRUCTIONS_SECTION_ID}
+              accentHeader={section.id === INSTRUCTIONS_SECTION_ID}
             />
           ))
         ) : (

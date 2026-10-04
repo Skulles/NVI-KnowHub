@@ -17,6 +17,7 @@ export function IpOctetInput({
   inputRef,
   compact,
   plain,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -24,6 +25,7 @@ export function IpOctetInput({
   inputRef?: (el: HTMLInputElement | null) => void;
   compact?: boolean;
   plain?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <input
@@ -33,6 +35,7 @@ export function IpOctetInput({
       autoComplete="off"
       maxLength={3}
       value={value}
+      disabled={disabled}
       onChange={(e) => {
         const next = e.target.value.replace(/\D/g, "").slice(0, 3);
         onChange(next);
@@ -46,10 +49,10 @@ export function IpOctetInput({
       }}
       className={
         plain
-          ? `bg-transparent px-0 py-0 text-center font-mono text-label-primary focus:outline-none ${
+          ? `bg-transparent px-0 py-0 text-center font-mono text-label-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 ${
               compact ? "w-9 text-[15px]" : "w-10 text-[16px]"
             }`
-          : `rounded-lg bg-surface-input/80 px-2 py-2 text-center font-mono text-label-primary transition-[background-color,box-shadow] duration-200 focus:bg-surface-input focus:outline-none focus:ring-2 focus:ring-tint-blue/40 ${
+          : `rounded-lg bg-surface-input/80 px-2 py-2 text-center font-mono text-label-primary transition-[background-color,box-shadow] duration-200 focus:bg-surface-input focus:outline-none focus:ring-2 focus:ring-tint-blue/40 disabled:cursor-not-allowed disabled:opacity-40 ${
               compact ? "w-10 text-[14px]" : "w-11 text-[15px]"
             }`
       }
@@ -69,10 +72,12 @@ export function ToggleSwitch({
   checked,
   onClick,
   ariaLabel,
+  disabled,
 }: {
   checked: boolean;
   onClick: () => void;
   ariaLabel: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -80,8 +85,9 @@ export function ToggleSwitch({
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
+      disabled={disabled}
       onClick={onClick}
-      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 disabled:cursor-not-allowed disabled:opacity-40 ${
         checked ? "bg-tint-blue" : "bg-surface-input"
       }`}
     >
@@ -98,15 +104,22 @@ export function ToggleField({
   label,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   checked: boolean;
   onChange: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center gap-3">
       <FieldLabel>{label}</FieldLabel>
-      <ToggleSwitch checked={checked} onClick={onChange} ariaLabel={label} />
+      <ToggleSwitch
+        checked={checked}
+        onClick={onChange}
+        ariaLabel={label}
+        disabled={disabled}
+      />
     </div>
   );
 }
@@ -132,7 +145,7 @@ function SegmentOptionTooltip({
         transform: "translate(-50%, -100%)",
         zIndex: 9999,
       }}
-      className="pointer-events-none whitespace-nowrap rounded-lg border border-surface-border/80 bg-surface-raised px-2.5 py-1.5 text-[12px] leading-snug text-label-secondary shadow-sheet"
+      className="pointer-events-none max-w-[22rem] rounded-lg border border-surface-border/80 bg-surface-raised px-2.5 py-1.5 text-[12px] leading-snug text-label-secondary shadow-sheet"
     >
       {text}
       <span
@@ -149,12 +162,14 @@ function SegmentOption<T extends string>({
   label,
   isActive,
   tooltip,
+  disabled,
   onChange,
 }: {
   option: T;
   label?: string;
   isActive: boolean;
   tooltip?: string;
+  disabled?: boolean;
   onChange: (v: T) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -173,16 +188,17 @@ function SegmentOption<T extends string>({
         role="radio"
         aria-label={tooltip ? `${displayLabel} — ${tooltip}` : displayLabel}
         aria-checked={isActive}
+        disabled={disabled}
         onClick={() => onChange(option)}
-        className={`flex w-full items-center justify-center whitespace-nowrap rounded-md px-3.5 font-mono text-[12.5px] font-semibold tracking-wide transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+        className={`flex w-full items-center justify-center whitespace-nowrap rounded-md px-3.5 font-mono text-[12.5px] font-semibold tracking-wide transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 disabled:cursor-not-allowed ${
           isActive
             ? "text-white"
-            : "text-label-tertiary hover:text-label-secondary"
+            : "text-label-tertiary hover:text-label-secondary disabled:hover:text-label-tertiary"
         }`}
       >
         {displayLabel}
       </button>
-      {hovered && tooltip && (
+      {hovered && !disabled && tooltip && (
         <SegmentOptionTooltip text={tooltip} anchorEl={ref.current} />
       )}
     </div>
@@ -196,6 +212,7 @@ export function SegmentToggle<T extends string>({
   labels,
   tooltips,
   ariaLabel,
+  disabled,
 }: {
   value: T;
   onChange: (value: T) => void;
@@ -203,15 +220,19 @@ export function SegmentToggle<T extends string>({
   labels?: Partial<Record<T, string>>;
   tooltips?: Partial<Record<T, string>>;
   ariaLabel: string;
+  disabled?: boolean;
 }) {
   const activeIndex = Math.max(0, options.indexOf(value));
 
   return (
     <div
-      className="relative inline-grid h-9 shrink-0 rounded-lg bg-surface-input/80 p-[3px] shadow-chromeTop"
+      className={`relative inline-grid h-9 shrink-0 rounded-lg bg-surface-input/80 p-[3px] shadow-chromeTop ${
+        disabled ? "opacity-40" : ""
+      }`}
       style={{ gridTemplateColumns: `repeat(${options.length}, 1fr)` }}
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-disabled={disabled || undefined}
     >
       <span
         aria-hidden
@@ -229,6 +250,7 @@ export function SegmentToggle<T extends string>({
           label={labels?.[option]}
           isActive={value === option}
           tooltip={tooltips?.[option]}
+          disabled={disabled}
           onChange={onChange}
         />
       ))}
@@ -239,13 +261,13 @@ export function SegmentToggle<T extends string>({
 const WIRELESS_PROTOCOL_TOOLTIPS: Partial<
   Record<GrooveaWirelessProtocol, string>
 > = {
-  nv2: "Протокол MikroTik - выше скорость между точками",
-  "802.11": "Стандартный Wi-Fi - совместим с любыми устройствами",
+  nv2: "Выбирайте для линка MikroTik↔MikroTik: выше пропускная способность и устойчивость к помехам. Несовместим с обычными Wi‑Fi клиентами.",
+  "802.11": "Выбирайте, если нужна совместимость со стандартным Wi‑Fi (ноутбуки, телефоны, чужие точки). Скорость линка обычно ниже, чем у nv2.",
 };
 
 const WIRELESS_BAND_TOOLTIPS: Partial<Record<GrooveaWirelessBand, string>> = {
-  "2.4 ГГц": "Больший радиус, ниже скорость",
-  "5 ГГц": "Меньший радиус, выше скорость",
+  "2.4 ГГц": "Выбирайте при большой дистанции или препятствиях (деревья, стены): дальше «бьёт», но медленнее и чаще ловит помехи от соседнего Wi‑Fi.",
+  "5 ГГц": "Выбирайте при прямой видимости и короткой/средней дистанции: выше скорость и меньше помех, но хуже проходит сквозь препятствия.",
 };
 
 function WirelessLinkNote({ text }: { text: string }) {
@@ -260,12 +282,14 @@ export function GrooveaWirelessSettings({
   band,
   onProtocolChange,
   onBandChange,
+  disabled,
 }: {
   wirelessStack: WirelessStack;
   protocol: GrooveaWirelessProtocol;
   band: GrooveaWirelessBand;
   onProtocolChange: (value: GrooveaWirelessProtocol) => void;
   onBandChange: (value: GrooveaWirelessBand) => void;
+  disabled?: boolean;
 }) {
   const note = buildWirelessLinkNote(wirelessStack, protocol, band);
 
@@ -284,6 +308,7 @@ export function GrooveaWirelessSettings({
             options={["2.4 ГГц", "5 ГГц"]}
             tooltips={WIRELESS_BAND_TOOLTIPS}
             ariaLabel="Диапазон беспроводной связи"
+            disabled={disabled}
           />
         </div>
         <WirelessLinkNote text={note} />
@@ -301,6 +326,7 @@ export function GrooveaWirelessSettings({
           options={["nv2", "802.11"]}
           tooltips={WIRELESS_PROTOCOL_TOOLTIPS}
           ariaLabel="Протокол беспроводной связи"
+          disabled={disabled}
         />
 
         <div
@@ -321,6 +347,7 @@ export function GrooveaWirelessSettings({
                 options={["2.4 ГГц", "5 ГГц"]}
                 tooltips={WIRELESS_BAND_TOOLTIPS}
                 ariaLabel="Диапазон беспроводной связи"
+                disabled={disabled}
               />
             </div>
           </div>
@@ -340,15 +367,18 @@ export const fieldControlFitClass =
 export function HintLink({
   children,
   onClick,
+  disabled,
 }: {
   children: ReactNode;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="self-start rounded-md px-1 py-0.5 text-[13px] text-tint-blue transition-colors hover:text-tint-blue-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50"
+      className="self-start rounded-md px-1 py-0.5 text-[13px] text-tint-blue transition-colors hover:text-tint-blue-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-tint-blue"
     >
       {children}
     </button>
