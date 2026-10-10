@@ -8,9 +8,15 @@ import { app, BrowserWindow, ipcMain, net } from 'electron'
 import { logger } from './logger'
 import { installParallelUpdateDownloader } from './parallelDownload'
 
+const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000
+
 let quittingForUpdate = false
 let targetWindow: BrowserWindow | null = null
 let ipcRegistered = false
+let downloadInProgress = false
+let downloadedVersion: string | null = null
+let notifiedAvailableVersion: string | null = null
+let notifiedDownloadedVersion: string | null = null
 
 export function isQuittingForUpdate(): boolean {
   return quittingForUpdate
@@ -38,6 +44,14 @@ function reportUpdateError(err: unknown): void {
   send('app:update-error', message)
 }
 
+function checkForAppUpdates(): void {
+  if (quittingForUpdate || downloadInProgress || downloadedVersion) return
+  if (!net.isOnline()) return
+  autoUpdater.checkForUpdates().catch((err) => {
+    logger.error('Update check failed', err)
+  })
+}
+
 export function setupUpdater(window: BrowserWindow): void {
   targetWindow = window
 
@@ -57,7 +71,9 @@ export function setupUpdater(window: BrowserWindow): void {
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.autoRunAppAfterInstall = true
 
-    autoUpdater.on('update-available', () => {
+    autoUpdater.on('update-available', (info) => {
+      if (info.version === notifiedAvailableVersion) return
+      notifiedAvailableVersion = info.version
       send('app:update-available')
     })
 
@@ -65,19 +81,27 @@ export function setupUpdater(window: BrowserWindow): void {
       send('app:update-download-progress', progress.percent)
     })
 
-    autoUpdater.on('update-downloaded', () => {
+    autoUpdater.on('update-downloaded', (info) => {
+      downloadInProgress = false
+      downloadedVersion = info.version
+      if (info.version === notifiedDownloadedVersion) return
+      notifiedDownloadedVersion = info.version
       send('app:update-downloaded')
     })
 
     autoUpdater.on('error', (err) => {
+      downloadInProgress = false
       reportUpdateError(err)
     })
 
     ipcMain.handle('app:start-update-download', async () => {
+      if (downloadInProgress) return { ok: true as const }
+      downloadInProgress = true
       try {
         await autoUpdater.downloadUpdate()
         return { ok: true as const }
       } catch (err) {
+        downloadInProgress = false
         logger.error('Update download failed', err)
         if (isOfflineUpdateError(err)) {
           return { ok: false as const, error: 'offline' }
@@ -101,8 +125,7 @@ export function setupUpdater(window: BrowserWindow): void {
       return { ok: true as const }
     })
 
-    autoUpdater.checkForUpdates().catch((err) => {
-      logger.error('Update check failed', err)
-    })
+    checkForAppUpdates()
+    setInterval(checkForAppUpdates, UPDATE_CHECK_INTERVAL_MS)
   }
 }

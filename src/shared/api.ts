@@ -261,4 +261,29 @@ export interface ElectronAPI {
   monitoringFetchMegaphoneStatuses(request: MonitoringAuthRequest): Promise<MonitoringMegaphoneStatusesResult>
   monitoringFetchDevices(request: MonitoringAuthRequest): Promise<MonitoringDevicesResult>
   monitoringProbeDevices(request: MonitoringDeviceProbeRequest): Promise<MonitoringDeviceProbeResult>
+  discoveryScan(): Promise<DiscoveryScanResult>
+  discoveryWatch(): Promise<DiscoveryScanResult>
+  discoveryCancel(): Promise<{ ok: boolean }>
+  onDiscoveryUpdate(cb: (result: DiscoveryScanResult) => void): () => void
+}
+
+export type DiscoveryDeviceKind = 'mikrotik' | 'cameras' | 'repka' | 'other'
+
+export interface DiscoveryDevice {
+  ip: string
+  mac: string
+  name: string | null
+  board: string | null
+  vendor: string
+  kind: DiscoveryDeviceKind
+  online?: boolean
+  seenAt?: number
+}
+
+export interface DiscoveryScanResult {
+  ok: boolean
+  devices: DiscoveryDevice[]
+  cancelled?: boolean
+  watching?: boolean
+  error?: string
 }

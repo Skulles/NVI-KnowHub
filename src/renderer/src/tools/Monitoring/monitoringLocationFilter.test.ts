@@ -44,6 +44,26 @@ describe('extractOeEndingWords', () => {
   it('treats hyphenated and plain spellings as one token per label', () => {
     expect(extractOeEndingWords('Покров-ское / Покровское')).toEqual(['Покров-ское'])
   })
+
+  it('keeps a direction word that stands before the field name', () => {
+    expect(extractOeEndingWords('БУ Западно Мессояхское месторождение')).toEqual([
+      'Западно Мессояхское'
+    ])
+    expect(extractOeEndingWords('Восточно Покровское')).toEqual(['Восточно Покровское'])
+    expect(extractOeEndingWords('Северно Новое')).toEqual(['Северно Новое'])
+    expect(extractOeEndingWords('Южно Покровское')).toEqual(['Южно Покровское'])
+    expect(extractOeEndingWords('Северо Покровское')).toEqual(['Северо Покровское'])
+    expect(extractOeEndingWords('Северо-Западно Покровское')).toEqual(['Северо-Западно Покровское'])
+    expect(extractOeEndingWords('Юго Восточно Покровское')).toEqual(['Юго Восточно Покровское'])
+  })
+
+  it('leaves a hyphenated direction inside the field name', () => {
+    expect(extractOeEndingWords('Западно-Мессояхское месторождение')).toEqual(['Западно-Мессояхское'])
+  })
+
+  it('does not take a direction that is not directly before the name', () => {
+    expect(extractOeEndingWords('Западно от Покровское')).toEqual(['Покровское'])
+  })
 })
 
 describe('buildOeLocationFilterOptions', () => {
@@ -89,12 +109,31 @@ describe('buildOeLocationFilterOptions', () => {
       { label: 'покурская залежь', count: 1 }
     ])
   })
+
+  it('keeps a spaced direction as its own location and merges it with the hyphenated spelling', () => {
+    const options = buildOeLocationFilterOptions([
+      stubObject({ id: 'owl1/', primaryLocationName: 'БУ Западно Мессояхское' }),
+      stubObject({ id: 'owl2/', primaryLocationName: 'Западно-Мессояхское месторождение' }),
+      stubObject({ id: 'owl3/', primaryLocationName: 'Мессояхское месторождение' })
+    ])
+    expect(options).toEqual([
+      { label: 'Западно Мессояхское', count: 2 },
+      { label: 'Мессояхское', count: 1 }
+    ])
+  })
 })
 
 describe('findKnownLocationToken', () => {
   it('matches deposits and clusters from the catalog', () => {
     expect(findKnownLocationToken('участок, покурская залежь')).toBe('покурская залежь')
     expect(findKnownLocationToken('БУ Ванкорский кластер')).toBe('Ванкорский кластер')
+  })
+
+  it('keeps a direction written with a space or a hyphen before the catalog name', () => {
+    expect(findKnownLocationToken('Западно Медвежье месторождение')).toBe('Западно Медвежье')
+    expect(findKnownLocationToken('Восточно-Чайво')).toBe('Восточно-Чайво')
+    expect(findKnownLocationToken('Северо Комсомольская группа')).toBe('Северо Комсомольская группа')
+    expect(findKnownLocationToken('Западно-Мессояхская группа')).toBe('Западно-Мессояхская группа')
   })
 })
 
@@ -126,6 +165,14 @@ describe('objectMatchesOeLocationFilter', () => {
   it('matches across hyphen spelling', () => {
     expect(objectMatchesOeLocationFilter(hyphenObject, 'Покровское')).toBe(true)
     expect(objectMatchesOeLocationFilter(object, 'Покров-ское')).toBe(true)
+  })
+
+  it('matches a spaced direction against the hyphenated field name', () => {
+    const spaced = stubObject({ primaryLocationName: 'БУ Западно Мессояхское' })
+    const hyphenated = stubObject({ primaryLocationName: 'Западно-Мессояхское месторождение' })
+    expect(objectMatchesOeLocationFilter(spaced, 'Западно-Мессояхское')).toBe(true)
+    expect(objectMatchesOeLocationFilter(hyphenated, 'Западно Мессояхское')).toBe(true)
+    expect(objectMatchesOeLocationFilter(spaced, 'Мессояхское')).toBe(false)
   })
 
   it('passes through when filter is cleared', () => {

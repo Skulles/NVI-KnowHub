@@ -145,7 +145,7 @@ export function Sidebar(): React.ReactElement {
   const selectItem = useContentStore((s) => s.selectItem)
 
   return (
-    <aside className="flex flex-col h-full w-[268px] flex-shrink-0 select-none bg-surface-sidebar border-r border-surface-border">
+    <aside className="sidebar flex flex-col h-full w-[268px] flex-shrink-0 select-none bg-surface-sidebar border-r border-surface-border">
       <div className="px-3.5 pt-4 pb-3.5 border-surface-border drag-region shrink-0">
         <div className="flex items-center gap-3.5 no-drag">
           <KnowHubLogoMark className="h-[52px] w-[52px] shrink-0 text-white" />
@@ -168,7 +168,7 @@ export function Sidebar(): React.ReactElement {
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 scroll-smooth min-h-0">
+      <nav className="sidebar-scroll flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 scroll-smooth min-h-0">
         {manifest?.sections.map((section) => (
           <SectionGroup
             key={section.id}

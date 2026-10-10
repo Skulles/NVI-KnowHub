@@ -40,6 +40,7 @@ Thumbs.db
 desktop.ini
 
 # ─── Temp / debug files ───────────────────────────────────────────────────────
+tmp/
 nul
 test-minimal-main.js
 build/.icon-sizes/

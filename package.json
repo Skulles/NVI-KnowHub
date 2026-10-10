@@ -1,6 +1,6 @@
 {
   "name": "nvi-knowhub",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "База знаний NVI",
   "main": "out/main/index.js",
   "scripts": {
@@ -26,6 +26,7 @@
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
+    "@types/ssh2": "^1.15.6",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
     "cross-env": "^10.1.0",
@@ -53,6 +54,7 @@
     "electron-updater": "^6.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "ssh2": "^1.17.0",
     "zustand": "^4.5.4"
   },
   "engines": {

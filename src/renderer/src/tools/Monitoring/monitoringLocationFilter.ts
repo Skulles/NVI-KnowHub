@@ -1,4 +1,4 @@
-import { findKnownLocationToken } from './monitoringLocationReference'
+import { attachLeadingDirection, findKnownLocationToken } from './monitoringLocationReference'
 import {
   resolveObjectCardLocationName,
   type MonitoringObject
@@ -14,17 +14,26 @@ export function normalizeOeLocationToken(word: string): string {
   return word.toLocaleLowerCase('ru').replace(/-/g, '')
 }
 
+const DIRECTION_KEY_PREFIX_RE =
+  /^(?:северозападно|северовосточно|югозападно|юговосточно|западно|восточно|северно|южно|северо|юго)\s+/u
+
+export function locationFilterTokenKey(label: string): string {
+  return normalizeOeLocationToken(label).replace(DIRECTION_KEY_PREFIX_RE, (prefix) => prefix.trimEnd())
+}
+
 export function extractOeEndingWords(locationLabel: string): string[] {
   if (!locationLabel.trim()) return []
   const seen = new Set<string>()
   const words: string[] = []
   for (const match of locationLabel.matchAll(OE_WORD_RE)) {
     const word = match[1]
-    if (!word) continue
-    const key = normalizeOeLocationToken(word)
+    if (!word || match.index === undefined) continue
+    const wordStart = match.index + match[0].length - word.length
+    const token = attachLeadingDirection(locationLabel, wordStart, word)
+    const key = locationFilterTokenKey(token)
     if (seen.has(key)) continue
     seen.add(key)
-    words.push(word)
+    words.push(token)
   }
   return words
 }
@@ -35,10 +44,6 @@ export function extractLocationFilterTokens(locationLabel: string): string[] {
   if (oe.length > 0) return oe
   const known = findKnownLocationToken(locationLabel)
   return known ? [known] : []
-}
-
-export function locationFilterTokenKey(label: string): string {
-  return normalizeOeLocationToken(label)
 }
 
 export function isUndeterminedMonitoringLocation(object: MonitoringObject): boolean {

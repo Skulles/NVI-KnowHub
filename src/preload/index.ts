@@ -67,7 +67,16 @@ const api: ElectronAPI = {
   monitoringFetchMegaphoneStatuses: (request) =>
     ipcRenderer.invoke('monitoring:fetch-megaphone-statuses', request),
   monitoringFetchDevices: (request) => ipcRenderer.invoke('monitoring:fetch-devices', request),
-  monitoringProbeDevices: (request) => ipcRenderer.invoke('monitoring:probe-devices', request)
+  monitoringProbeDevices: (request) => ipcRenderer.invoke('monitoring:probe-devices', request),
+
+  discoveryScan: () => ipcRenderer.invoke('discovery:scan'),
+  discoveryWatch: () => ipcRenderer.invoke('discovery:watch'),
+  discoveryCancel: () => ipcRenderer.invoke('discovery:cancel'),
+  onDiscoveryUpdate: (cb) => {
+    const handler = (_: unknown, result: import('../shared/api').DiscoveryScanResult): void => cb(result)
+    ipcRenderer.on('discovery:update', handler)
+    return () => ipcRenderer.off('discovery:update', handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

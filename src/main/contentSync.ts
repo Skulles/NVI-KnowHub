@@ -13,6 +13,11 @@ import { logger } from './logger'
 const FETCH_TIMEOUT_MS = 30_000
 const MAX_RESPONSE_BYTES = 15 * 1024 * 1024
 const CONTENT_DOWNLOAD_CONCURRENCY = 6
+const CONTENT_SYNC_INTERVAL_MS = 2 * 60 * 60 * 1000
+
+let contentWindow: BrowserWindow | null = null
+let contentSyncTimer: ReturnType<typeof setInterval> | null = null
+let contentSyncInFlight = false
 
 function serverUrl(): string | null {
   const raw = process.env['KNOWHUB_SERVER_URL']?.trim()
@@ -169,6 +174,16 @@ function sendContentUpdated(window: BrowserWindow): void {
 }
 
 async function syncContent(window: BrowserWindow): Promise<void> {
+  if (contentSyncInFlight || !net.isOnline()) return
+  contentSyncInFlight = true
+  try {
+    await performContentSync(window)
+  } finally {
+    contentSyncInFlight = false
+  }
+}
+
+async function performContentSync(window: BrowserWindow): Promise<void> {
   ensureContentDir()
   const local = getManifest()
   const baseUrl = serverUrl()
@@ -307,7 +322,16 @@ function scheduleInitialSync(window: BrowserWindow): void {
   }
 }
 
+function checkForContentUpdates(): void {
+  const window = contentWindow
+  if (!window || window.isDestroyed()) return
+  void syncContent(window).catch((e) => logger.error('Content sync failed', e))
+}
+
 export function setupContentSync(window: BrowserWindow): void {
+  contentWindow = window
   seedFromBundled()
   scheduleInitialSync(window)
+  if (contentSyncTimer) return
+  contentSyncTimer = setInterval(checkForContentUpdates, CONTENT_SYNC_INTERVAL_MS)
 }

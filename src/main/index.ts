@@ -1,6 +1,6 @@
 /**
  * Electron main process entry: single-instance lock, BrowserWindow,
- * security hooks, and IPC wiring for content / updater / WinBox / monitoring.
+ * security hooks, and IPC wiring for content / updater / WinBox / monitoring / discovery.
  */
 import { app, shell, BrowserWindow, ipcMain, screen } from 'electron'
 import { existsSync } from 'fs'
@@ -9,6 +9,7 @@ import { setupUpdater, isQuittingForUpdate } from './updater'
 import { setupContentSync, getManifest, getArticleHtml } from './contentSync'
 import { setupWinbox } from './winbox'
 import { setupMonitoring } from './monitoring'
+import { setupDiscovery } from './discovery'
 import { isAllowedAppNavigation, isAllowedExternalUrl } from './safe'
 import { logger, setupProcessErrorHandlers } from './logger'
 
@@ -141,6 +142,7 @@ function registerIpcHandlers(): void {
 
   setupWinbox()
   setupMonitoring()
+  setupDiscovery()
 }
 
 if (gotTheLock) {
