@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { extraRoutesToInstall, netshRouteArgs, createExtraRouteSession } from './discoveryOnlinkRoute'
+import {
+  createExtraRouteSession,
+  extraRoutesToInstall,
+  ifacesThatAreUp,
+  interfacesForExtraRoutes,
+  starterCommand,
+  windowsRouteScript
+} from './discoveryOnlinkRoute'
 
 const ethernet = { name: 'Ethernet', address: '192.168.10.236', netmask: '255.255.255.0' }
 
@@ -31,50 +38,69 @@ describe('temporary on-link routes', () => {
     expect(extraRoutesToInstall(ifaces)).toEqual([])
   })
 
-  it('builds an active on-link netsh route with a high metric', () => {
-    expect(netshRouteArgs('add', 'Ethernet', '192.168.0.0/24')).toEqual([
-      'interface',
-      'ipv4',
-      'add',
-      'route',
-      'prefix=192.168.0.0/24',
-      'interface=Ethernet',
-      'store=active',
-      'metric=9000'
-    ])
-    expect(netshRouteArgs('delete', 'Ethernet', '192.168.0.0/24')).toEqual([
-      'interface',
-      'ipv4',
-      'delete',
-      'route',
-      'prefix=192.168.0.0/24',
-      'interface=Ethernet',
-      'store=active'
-    ])
+  it('prefers the wired NIC and skips virtual adapters', () => {
+    const ifaces = [
+      { name: 'vEthernet (WSL)', address: '172.22.0.1', netmask: '255.255.240.0' },
+      { name: 'Wi-Fi', address: '10.0.0.8', netmask: '255.255.255.0' },
+      ethernet
+    ]
+    expect(interfacesForExtraRoutes(ifaces).map((iface) => iface.name)).toEqual(['Ethernet'])
+    expect(extraRoutesToInstall(ifaces).every((route) => route.iface === 'Ethernet')).toBe(true)
   })
 
-  it('keeps the route for the scan and removes only routes this session added', async () => {
-    const commands: string[][] = []
-    const session = createExtraRouteSession(async (args) => {
-      commands.push(args)
+  it('keeps only adapters that are link-up', () => {
+    const wifi = { name: 'Wi-Fi', address: '10.0.0.8', netmask: '255.255.255.0' }
+    expect(ifacesThatAreUp([ethernet, wifi], ['Wi-Fi']).map((iface) => iface.name)).toEqual(['Wi-Fi'])
+    expect(ifacesThatAreUp([ethernet], ['Неизвестный']).map((iface) => iface.name)).toEqual(['Ethernet'])
+  })
+
+  it('uses Wi-Fi when it is the only real NIC', () => {
+    const wifi = { name: 'Беспроводная сеть', address: '10.0.0.8', netmask: '255.255.255.0' }
+    expect(interfacesForExtraRoutes([wifi]).map((iface) => iface.name)).toEqual(['Беспроводная сеть'])
+  })
+
+  it('builds an elevated on-link route script', () => {
+    const script = windowsRouteScript(
+      [{ iface: "Ethernet'", cidr: '192.168.0.0/24' }],
+      42,
+      'C:\\ready.txt',
+      'C:\\stop',
+      'C:\\done.txt'
+    )
+    expect(script).toContain("$parent = 42")
+    expect(script).toContain("Prefix = '192.168.0.0/24'")
+    expect(script).toContain("Alias = 'Ethernet'''")
+    expect(script).toContain('New-NetRoute')
+    expect(script).toContain('-RouteMetric 9000')
+    expect(script).toContain('Remove-NetRoute -Confirm:$false')
+    const starter = starterCommand('C:\\Users\\A B\\routes.ps1')
+    expect(starter).toContain("$psi.Verb = 'RunAs'")
+    expect(starter).toContain('-File "C:\\Users\\A B\\routes.ps1"')
+  })
+
+  it('installs the wanted routes once and removes them when the scan stops', async () => {
+    const applied: string[][] = []
+    const session = createExtraRouteSession(async (routes) => {
+      applied.push(routes.map((route) => route.cidr))
     })
     await session.sync([ethernet])
     await session.sync([ethernet])
-    expect(commands.filter((args) => args.includes('add'))).toHaveLength(3)
+    expect(applied).toEqual([['192.168.0.0/24', '192.168.1.0/24', '192.168.3.152/32']])
+    expect(session.has()).toBe(true)
     await session.clear()
-    expect(commands.filter((args) => args.includes('delete'))).toHaveLength(3)
+    expect(applied[1]).toEqual([])
     expect(session.has()).toBe(false)
   })
 
-  it('does not remove a route that netsh refused to add', async () => {
-    const commands: string[][] = []
-    const session = createExtraRouteSession(async (args) => {
-      if (args.includes('add')) throw new Error('access denied')
-      commands.push(args)
+  it('does not remove routes when install fails', async () => {
+    const applied: number[] = []
+    const session = createExtraRouteSession(async (routes) => {
+      applied.push(routes.length)
+      if (routes.length) throw new Error('access denied')
     })
-    await session.sync([ethernet])
+    await expect(session.sync([ethernet])).rejects.toThrow('access denied')
     await session.clear()
-    expect(commands).toEqual([])
+    expect(applied).toEqual([3])
     expect(session.has()).toBe(false)
   })
 })

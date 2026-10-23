@@ -70,11 +70,11 @@ async function mapPool(hosts: string[], signal: AbortSignal): Promise<string[]> 
 export function pingLiveHosts(
   ifaces: OnlinkIface[],
   knownIps: Set<string>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options: { includeExtras?: boolean } = {}
 ): Promise<string[]> {
-  const targets = [...new Set([...collectOnlinkPingTargets(ifaces), ...collectExtraCidrTargets(ifaces)])].filter(
-    (ip) => !knownIps.has(ip)
-  )
+  const extras = options.includeExtras === false ? [] : collectExtraCidrTargets(ifaces)
+  const targets = [...new Set([...collectOnlinkPingTargets(ifaces), ...extras])].filter((ip) => !knownIps.has(ip))
   if (!targets.length || signal.aborted) return Promise.resolve([])
   return mapPool(targets, signal)
 }

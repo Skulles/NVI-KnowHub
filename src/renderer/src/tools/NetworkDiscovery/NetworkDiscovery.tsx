@@ -176,7 +176,7 @@ export function NetworkDiscovery() {
       setError(result.error ?? 'Не удалось выполнить поиск')
       return
     }
-    setError(null)
+    setError(result.error ?? null)
     setDevices(result.devices)
   }, [])
 

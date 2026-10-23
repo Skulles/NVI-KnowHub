@@ -46,6 +46,15 @@
     padding: 0;
   }
 
+  html.platform-windows body {
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  html.platform-windows.is-maximized body {
+    border-radius: 0;
+  }
+
   body {
     font-size: 16px;
     line-height: 1.5;
@@ -97,6 +106,15 @@
 
   .drag-region {
     -webkit-app-region: drag;
+  }
+
+  .window-titlebar {
+    width: env(titlebar-area-width, 100%);
+    height: env(titlebar-area-height, 0px);
+    margin-left: env(titlebar-area-x, 0px);
+    min-height: 0;
+    -webkit-app-region: drag;
+    app-region: drag;
   }
 
   .no-drag {

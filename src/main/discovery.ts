@@ -56,7 +56,16 @@ import {
 } from './discoveryWs'
 import { applyNeighborMacs, readNeighborMacs } from './discoveryNeighbors'
 import { pingLiveHosts } from './discoveryPing'
-import { clearExtraOnlinkRoutes, clearExtraOnlinkRoutesOnQuit, syncExtraOnlinkRoutes } from './discoveryOnlinkRoute'
+import { collectExtraCidrTargets } from './discoveryOnlink'
+import { probeSendArp } from './discoveryArp'
+import {
+  clearExtraOnlinkRoutes,
+  clearExtraOnlinkRoutesOnQuit,
+  extraRouteInterfaceNames,
+  extraRoutesActive,
+  extraRouteWarning,
+  syncExtraOnlinkRoutes
+} from './discoveryOnlinkRoute'
 import { dedupeDiscoveryDevices, otherFromAlive, usableMac } from './discoveryFingerprint'
 import { readNetbiosNames } from './discoveryNbns'
 import { readHttpDeviceTitles } from './discoveryHttp'
@@ -517,7 +526,13 @@ function trackKey(device: DiscoveryDevice): string {
 
 function publishWatch(): void {
   if (!watch) return
-  const result: DiscoveryScanResult = { ok: true, devices: snapshotWatch(), watching: true }
+  const warning = extraRouteWarning()
+  const result: DiscoveryScanResult = {
+    ok: true,
+    devices: snapshotWatch(),
+    watching: true,
+    ...(warning ? { error: warning } : {})
+  }
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed() || window.webContents.isDestroyed()) continue
     window.webContents.send('discovery:update', result)
@@ -692,15 +707,26 @@ async function runProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<vo
   const localIps = new Set(ifaces.map((iface) => iface.address))
   await syncExtraOnlinkRoutes(ifaces)
   if (signal.aborted) return
-  const [mikrotik, cameras, pingAlive] = await Promise.all([
+  const extrasReady = extraRoutesActive()
+  const extraIps = extrasReady ? collectExtraCidrTargets(ifaces).filter((ip) => !localIps.has(ip)) : []
+  const routeNames = new Set(extraRouteInterfaceNames())
+  const arpSources = ifaces.filter((iface) => routeNames.has(iface.name)).map((iface) => iface.address)
+  const [mikrotik, cameras, pingAlive, arpMacs] = await Promise.all([
     discoverGroup('mndp', discoverMikrotik, signal),
     discoverGroup('onvif', (inner) => discoverCameras(inner, { skipSsdp }), signal),
-    pingLiveHosts(ifaces, localIps, signal)
+    pingLiveHosts(ifaces, localIps, signal, { includeExtras: extrasReady }),
+    process.platform === 'win32' && extraIps.length && arpSources.length
+      ? probeSendArp(arpSources, extraIps, signal).catch((error) => {
+          logger.warn('discovery extra arp failed', error)
+          return new Map<string, string>()
+        })
+      : Promise.resolve(new Map<string, string>())
   ])
   if (signal.aborted) return
   const neighbors = await readNeighborMacs()
+  for (const [ip, mac] of arpMacs) neighbors.set(ip, mac)
   const announced = [...mikrotik, ...cameras]
-  const others = otherFromAlive(pingAlive, neighbors, {
+  const others = otherFromAlive([...pingAlive, ...arpMacs.keys()], neighbors, {
     ips: new Set([...localIps, ...announced.map((device) => device.ip)]),
     macs: new Set(announced.map((device) => device.mac))
   })
@@ -726,7 +752,7 @@ async function runProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<vo
   sweepWatch()
   const snapshot = snapshotWatch()
   const online = snapshot.filter((device) => device.online !== false).length
-  logger.info(`discovery watch online=${online} total=${snapshot.length}`)
+  logger.info(`discovery watch online=${online} total=${snapshot.length} extraArp=${arpMacs.size}`)
 }
 
 async function watchLoop(signal: AbortSignal): Promise<void> {
@@ -774,9 +800,17 @@ async function startWatch(): Promise<DiscoveryScanResult> {
   try {
     await wait(LISTEN_MS + 800, controller.signal)
   } catch {
-    return { ok: true, devices: snapshotWatch(), watching: true, cancelled: true }
+    const cancelledWarning = extraRouteWarning()
+    return {
+      ok: true,
+      devices: snapshotWatch(),
+      watching: true,
+      cancelled: true,
+      ...(cancelledWarning ? { error: cancelledWarning } : {})
+    }
   }
-  return { ok: true, devices: snapshotWatch(), watching: true }
+  const warning = extraRouteWarning()
+  return { ok: true, devices: snapshotWatch(), watching: true, ...(warning ? { error: warning } : {}) }
 }
 
 async function runDiscoveryScan(): Promise<DiscoveryScanResult> {

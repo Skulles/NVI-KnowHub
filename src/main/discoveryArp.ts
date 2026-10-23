@@ -57,6 +57,90 @@ Get-Content -LiteralPath '${escaped}' | ForEach-Object {
 `
 }
 
+function sendArpParallelScript(srcIp: string, listPath: string): string {
+  const src = srcIp.replace(/'/g, "''")
+  const list = listPath.replace(/'/g, "''")
+  return `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -Namespace KnowHubArpSweep -Name Native -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("iphlpapi.dll", ExactSpelling=true)]
+public static extern int SendARP(uint destIP, uint srcIP, byte[] macAddr, ref uint physicalAddrLen);
+'@
+$src = [BitConverter]::ToUInt32(([Net.IPAddress]::Parse('${src}')).GetAddressBytes(), 0)
+$ips = @(Get-Content -LiteralPath '${list}' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($ips.Count -eq 0) { return }
+$pool = [runspacefactory]::CreateRunspacePool(1, 48)
+$pool.Open()
+$jobs = foreach ($dest in $ips) {
+  $ps = [powershell]::Create()
+  $ps.RunspacePool = $pool
+  [void]$ps.AddScript({
+    param($dest, $src)
+    $mac = New-Object byte[] 6
+    $len = [uint32]6
+    $destN = [BitConverter]::ToUInt32(([Net.IPAddress]::Parse($dest)).GetAddressBytes(), 0)
+    if ([KnowHubArpSweep.Native]::SendARP($destN, $src, $mac, [ref]$len) -eq 0 -and $len -ge 6) {
+      $hex = ($mac[0..5] | ForEach-Object { $_.ToString('X2') }) -join ':'
+      Write-Output "$dest $hex"
+    }
+  }).AddArgument($dest).AddArgument($src)
+  [pscustomobject]@{ Ps = $ps; Handle = $ps.BeginInvoke() }
+}
+foreach ($job in @($jobs)) {
+  try { $job.Ps.EndInvoke($job.Handle) } catch {}
+  $job.Ps.Dispose()
+}
+$pool.Close()
+$pool.Dispose()
+`
+}
+
+async function probeSendArpOne(srcIp: string, destIps: string[], signal: AbortSignal): Promise<Map<string, string>> {
+  if (signal.aborted || !destIps.length) return new Map()
+  const dir = mkdtempSync(join(tmpdir(), 'knowhub-arp-'))
+  const listPath = join(dir, 'ips.txt')
+  writeFileSync(listPath, destIps.join('\n'), 'utf8')
+  try {
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', sendArpParallelScript(srcIp, listPath)],
+      { timeout: 90_000, windowsHide: true, encoding: 'utf8', signal }
+    )
+    return parseSendArpLines(stdout)
+  } catch (error) {
+    const stdout =
+      error && typeof error === 'object' && 'stdout' in error ? String((error as { stdout?: unknown }).stdout ?? '') : ''
+    const found = parseSendArpLines(stdout)
+    if (found.size) return found
+    throw error
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+export async function probeSendArp(
+  sources: string[],
+  destIps: string[],
+  signal: AbortSignal
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  if (process.platform !== 'win32' || signal.aborted) return found
+  let remaining = [...new Set(destIps.filter((ip) => isIPv4(ip)))]
+  for (const src of sources) {
+    if (signal.aborted || !remaining.length || !isIPv4(src)) break
+    try {
+      for (const [ip, mac] of await probeSendArpOne(src, remaining, signal)) found.set(ip, mac)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (signal.aborted) break
+      throw new Error(message)
+    }
+    remaining = remaining.filter((ip) => !found.has(ip))
+  }
+  return found
+}
+
 async function probeWindowsArp(
   ifaces: OnlinkIface[],
   destIps: string[],
