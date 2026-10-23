@@ -69,8 +69,6 @@ const MIN_WINDOW_HEIGHT = 600
 /** Совпадает с Tailwind `surface.window` / `--bg`. */
 const WINDOW_CHROME_COLOR = '#0b0e16'
 const WINDOW_CHROME_SYMBOL_COLOR = '#eef1f8'
-/** Совпадает с `border-radius` у `html.platform-windows body`. */
-const WINDOW_CORNER_RADIUS = 10
 
 function windowsChromeOptions(): {
   backgroundColor: string
@@ -94,73 +92,32 @@ function windowsChromeOptions(): {
   }
 }
 
-function roundedWindowShape(
-  width: number,
-  height: number,
-  radius: number
-): { x: number; y: number; width: number; height: number }[] {
-  const r = Math.max(0, Math.min(radius, Math.floor(width / 2), Math.floor(height / 2)))
-  if (r === 0 || width <= 0 || height <= 0) return []
-
-  const insetAt = (distanceFromCenter: number): number => {
-    const dx = Math.sqrt(Math.max(0, r * r - distanceFromCenter * distanceFromCenter))
-    return Math.max(0, Math.floor(r - dx))
-  }
-
-  const rects: { x: number; y: number; width: number; height: number }[] = []
-  for (let y = 0; y < r; y++) {
-    const inset = insetAt(r - y - 0.5)
-    rects.push({ x: inset, y, width: Math.max(0, width - inset * 2), height: 1 })
-  }
-  if (height - r * 2 > 0) {
-    rects.push({ x: 0, y: r, width, height: height - r * 2 })
-  }
-  for (let y = 0; y < r; y++) {
-    const inset = insetAt(y + 0.5)
-    rects.push({
-      x: inset,
-      y: height - r + y,
-      width: Math.max(0, width - inset * 2),
-      height: 1
-    })
-  }
-  return rects
-}
-
+/** У развёрнутого окна убирает CSS-скругление, чтобы не оставались прозрачные углы. */
 function attachWindowCorners(mainWindow: BrowserWindow): void {
   if (process.platform !== 'win32') return
 
   let squareApplied: boolean | null = null
-  let classSynced = false
 
   const apply = (): void => {
-    if (mainWindow.isDestroyed()) return
-    const square = mainWindow.isMaximized() || mainWindow.isFullScreen()
-    if (square) {
-      if (squareApplied !== true) mainWindow.setShape([])
-    } else {
-      const [width, height] = mainWindow.getSize()
-      mainWindow.setShape(roundedWindowShape(width, height, WINDOW_CORNER_RADIUS))
+    if (mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || mainWindow.webContents.isLoading()) {
+      return
     }
-    const needsClass = !classSynced || squareApplied !== square
+    const square = mainWindow.isMaximized() || mainWindow.isFullScreen()
+    if (squareApplied === square) return
     squareApplied = square
-    if (!needsClass || mainWindow.webContents.isDestroyed() || mainWindow.webContents.isLoading()) return
-    classSynced = true
     void mainWindow.webContents
       .executeJavaScript(`document.documentElement.classList.toggle('is-maximized', ${square})`)
       .catch(() => {
-        classSynced = false
+        squareApplied = null
       })
   }
 
-  apply()
-  mainWindow.on('resize', apply)
   mainWindow.on('maximize', apply)
   mainWindow.on('unmaximize', apply)
   mainWindow.on('enter-full-screen', apply)
   mainWindow.on('leave-full-screen', apply)
   mainWindow.webContents.on('did-finish-load', () => {
-    classSynced = false
+    squareApplied = null
     apply()
   })
 }

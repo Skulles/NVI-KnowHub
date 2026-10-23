@@ -78,6 +78,9 @@ const PROBE_EVERY_MS = 15_000
 const DEFAULT_STALE_MS = 60_000
 const STALE_CHECK_MS = 5_000
 
+/** A full extra-subnet sweep can outlast DEFAULT_STALE_MS. Keep rows until it finishes. */
+let probeRoundActive = false
+
 interface TrackedDevice extends DiscoveryDevice {
   seenAt: number
   expireAt: number
@@ -540,6 +543,7 @@ function publishWatch(): void {
 }
 
 function isTrackedLive(device: TrackedDevice, now = Date.now()): boolean {
+  if (probeRoundActive) return device.online
   return device.online && now < device.expireAt
 }
 
@@ -702,6 +706,15 @@ async function attachWatchSsdp(signal: AbortSignal): Promise<void> {
 }
 
 async function runProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<void> {
+  probeRoundActive = true
+  try {
+    await finishProbeRound(signal, skipSsdp)
+  } finally {
+    probeRoundActive = false
+  }
+}
+
+async function finishProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<void> {
   const roundStarted = Date.now()
   const ifaces = listScanInterfaces()
   const localIps = new Set(ifaces.map((iface) => iface.address))

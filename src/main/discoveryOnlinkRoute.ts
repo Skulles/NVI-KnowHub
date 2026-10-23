@@ -2,20 +2,22 @@
  * Temporary on-link routes for 192.168.0.0/24, 192.168.1.0/24, and 192.168.3.152/32.
  * Windows sends ping and ARP for a foreign subnet only through a gateway. On a switch
  * with no gateway, an on-link route (no next hop) makes the NIC ask for those addresses.
- * Adding the route needs administrator rights, so the scan asks Windows once and the
- * elevated helper removes the routes when the scan stops or the app exits.
+ * Adding the route needs administrator rights. The first scan asks once and saves
+ * a scheduled task; later scans start that task with no further prompt. The task
+ * removes the routes when the scan stops or the app exits.
  */
 import { execFile } from 'child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { promisify } from 'util'
+import { app } from 'electron'
 import { EXTRA_HOST_CIDRS, EXTRA_SCAN_CIDRS, netmaskToPrefix, parseCidr, type OnlinkIface } from './discoveryOnlink'
 import { ipv4ToInt, isIPv4 } from './discoveryMndp'
 import { logger } from './logger'
 
 const execFileAsync = promisify(execFile)
 const ONLINK_ROUTE_METRIC = 9000
+export const ROUTE_TASK_NAME = 'NVI KnowHub Route'
 const ROUTE_DENIED =
   'Не удалось искать 192.168.0.0, 192.168.1.0 и 192.168.3.152: не подтверждены права администратора.'
 
@@ -83,39 +85,31 @@ function routeListKey(routes: ExtraOnlinkRoute[]): string {
   return routes.map(routeKey).sort().join('\n')
 }
 
-function psQuote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
-}
-
-export function windowsRouteScript(
-  routes: ExtraOnlinkRoute[],
-  parentPid: number,
-  readyPath: string,
-  stopPath: string,
-  donePath: string
-): string {
-  const entries = routes
-    .map((route) => `  @{ Prefix = ${psQuote(route.cidr)}; Alias = ${psQuote(route.iface)} }`)
-    .join('\n')
+export function routeHelperScript(): string {
   return `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$parent = ${parentPid}
-$ready = ${psQuote(readyPath)}
-$stop = ${psQuote(stopPath)}
-$done = ${psQuote(donePath)}
-$routes = @(
-${entries}
-)
+$jobPath = Join-Path $PSScriptRoot 'job.json'
+if (-not (Test-Path -LiteralPath $jobPath)) { exit 0 }
+$job = Get-Content -LiteralPath $jobPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$parent = [int]$job.parent
+$ready = [string]$job.ready
+$stop = [string]$job.stop
+$done = [string]$job.done
+$metric = ${ONLINK_ROUTE_METRIC}
+$routes = @($job.routes)
 $added = @()
 try {
   foreach ($route in $routes) {
-    $adapter = Get-NetAdapter -Name $route.Alias -ErrorAction Stop
-    $existing = @(Get-NetRoute -DestinationPrefix $route.Prefix -InterfaceIndex $adapter.ifIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+    $prefix = [string]$route.Prefix
+    $alias = [string]$route.Alias
+    if (-not $prefix -or -not $alias) { continue }
+    $adapter = Get-NetAdapter -Name $alias -ErrorAction Stop
+    $existing = @(Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $adapter.ifIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
       Where-Object { $_.NextHop -eq '0.0.0.0' })
-    $ours = @($existing | Where-Object { $_.RouteMetric -eq ${ONLINK_ROUTE_METRIC} })
+    $ours = @($existing | Where-Object { $_.RouteMetric -eq $metric })
     if ($existing.Count -eq 0) {
-      New-NetRoute -DestinationPrefix $route.Prefix -InterfaceIndex $adapter.ifIndex -NextHop 0.0.0.0 -RouteMetric ${ONLINK_ROUTE_METRIC} -PolicyStore ActiveStore | Out-Null
+      New-NetRoute -DestinationPrefix $prefix -InterfaceIndex $adapter.ifIndex -NextHop 0.0.0.0 -RouteMetric $metric -PolicyStore ActiveStore | Out-Null
       $added += $route
     } elseif ($ours.Count -gt 0) {
       $added += $route
@@ -126,14 +120,36 @@ try {
     Start-Sleep -Milliseconds 400
   }
 } catch {
-  Set-Content -LiteralPath $ready -Value $_.Exception.Message -Encoding utf8
+  if ($ready) { Set-Content -LiteralPath $ready -Value $_.Exception.Message -Encoding utf8 }
 } finally {
   foreach ($route in $added) {
-    Get-NetRoute -DestinationPrefix $route.Prefix -InterfaceAlias $route.Alias -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
-      Where-Object { $_.NextHop -eq '0.0.0.0' -and $_.RouteMetric -eq ${ONLINK_ROUTE_METRIC} } |
+    Get-NetRoute -DestinationPrefix ([string]$route.Prefix) -InterfaceAlias ([string]$route.Alias) -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+      Where-Object { $_.NextHop -eq '0.0.0.0' -and $_.RouteMetric -eq $metric } |
       Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
   }
-  Set-Content -LiteralPath $done -Value 'done' -Encoding ascii
+  if ($done) { Set-Content -LiteralPath $done -Value 'done' -Encoding ascii }
+}
+`
+}
+
+export function registerTaskScript(helperPath: string, resultPath: string): string {
+  const helper = helperPath.replace(/'/g, "''")
+  const result = resultPath.replace(/'/g, "''")
+  return `
+$ErrorActionPreference = 'Stop'
+$result = '${result}'
+try {
+  $helper = '${helper}'
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $helper + '"'
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+  $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances Parallel
+  $settings.ExecutionTimeLimit = 'PT24H'
+  Register-ScheduledTask -TaskName '${ROUTE_TASK_NAME}' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+  Set-Content -LiteralPath $result -Value 'ok' -Encoding ascii
+} catch {
+  Set-Content -LiteralPath $result -Value $_.Exception.Message -Encoding utf8
 }
 `
 }
@@ -214,9 +230,49 @@ export function createExtraRouteSession(apply: (routes: ExtraOnlinkRoute[]) => P
 }
 
 interface RouteHelper {
-  dir: string
   stopPath: string
   donePath: string
+}
+
+function routeDir(): string {
+  const dir = join(app.getPath('userData'), 'discovery-route')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+function writeRouteFile(path: string, contents: string): void {
+  writeFileSync(path, `\uFEFF${contents}`, 'utf8')
+}
+
+async function routeTaskExists(): Promise<boolean> {
+  try {
+    await execFileAsync('schtasks.exe', ['/Query', '/TN', ROUTE_TASK_NAME], {
+      timeout: 8000,
+      windowsHide: true
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function ensureRouteTask(helperPath: string): Promise<void> {
+  const markerPath = join(routeDir(), 'task-path.txt')
+  const marked = existsSync(markerPath) && readFileSync(markerPath, 'utf8').replace(/^\uFEFF/, '').trim() === helperPath
+  if (marked && (await routeTaskExists())) return
+  const dir = routeDir()
+  const registerPath = join(dir, 'register.ps1')
+  const resultPath = join(dir, 'register-result.txt')
+  rmSync(resultPath, { force: true })
+  writeRouteFile(registerPath, registerTaskScript(helperPath, resultPath))
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', starterCommand(registerPath)], {
+    timeout: 120_000,
+    windowsHide: true
+  })
+  const result = await waitForFile(resultPath, 20_000)
+  if (result !== 'ok') throw new Error(result || 'Не удалось сохранить разрешение')
+  writeFileSync(markerPath, helperPath, 'utf8')
+  logger.info('discovery route task installed')
 }
 
 let helper: RouteHelper | null = null
@@ -251,46 +307,51 @@ async function stopHelper(): Promise<void> {
     // helper directory already gone
   }
   await waitForFile(current.donePath, 8000)
-  rmSync(current.dir, { recursive: true, force: true })
+  rmSync(current.stopPath, { force: true })
+  rmSync(current.donePath, { force: true })
 }
 
 async function startHelper(routes: ExtraOnlinkRoute[]): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'knowhub-route-'))
-  const scriptPath = join(dir, 'routes.ps1')
+  const dir = routeDir()
+  const helperPath = join(dir, 'helper.ps1')
   const readyPath = join(dir, 'ready.txt')
   const stopPath = join(dir, 'stop')
   const donePath = join(dir, 'done.txt')
-  writeFileSync(
-    scriptPath,
-    `\uFEFF${windowsRouteScript(routes, process.pid, readyPath, stopPath, donePath)}`,
-    'utf8'
+  const jobPath = join(dir, 'job.json')
+  writeRouteFile(helperPath, routeHelperScript())
+  await ensureRouteTask(helperPath)
+  for (const path of [readyPath, stopPath, donePath]) rmSync(path, { force: true })
+  writeRouteFile(
+    jobPath,
+    JSON.stringify({
+      parent: process.pid,
+      ready: readyPath,
+      stop: stopPath,
+      done: donePath,
+      routes: routes.map((route) => ({ Prefix: route.cidr, Alias: route.iface }))
+    })
   )
   try {
-    await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', starterCommand(scriptPath)], {
+    await execFileAsync('schtasks.exe', ['/Run', '/TN', ROUTE_TASK_NAME], { timeout: 15_000, windowsHide: true })
+  } catch (error) {
+    logger.warn('discovery route task run failed, asking for rights again', error)
+    await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', starterCommand(helperPath)], {
       timeout: 120_000,
       windowsHide: true
     })
-  } catch (error) {
-    rmSync(dir, { recursive: true, force: true })
-    throw error
   }
   const ready = await waitForFile(readyPath, 20_000)
   if (ready !== 'ok') {
-    await stopHelperFile(stopPath, donePath)
-    rmSync(dir, { recursive: true, force: true })
+    try {
+      writeFileSync(stopPath, 'stop', 'utf8')
+    } catch {
+      // stop file is optional if the helper already exited
+    }
+    await waitForFile(donePath, 8000)
     throw new Error(ready || 'Маршрут не добавлен')
   }
-  helper = { dir, stopPath, donePath }
+  helper = { stopPath, donePath }
   logger.info(`discovery on-link routes ready: ${routes.map((route) => route.cidr).join(', ')}`)
-}
-
-async function stopHelperFile(stopPath: string, donePath: string): Promise<void> {
-  try {
-    writeFileSync(stopPath, 'stop', 'utf8')
-  } catch {
-    return
-  }
-  await waitForFile(donePath, 8000)
 }
 
 async function applyWindowsRoutes(routes: ExtraOnlinkRoute[]): Promise<void> {

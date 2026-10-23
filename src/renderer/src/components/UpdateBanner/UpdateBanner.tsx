@@ -318,7 +318,7 @@ function AppUpdateDownloadCorner(): React.ReactElement | null {
   const percent = Math.max(0, Math.min(100, Math.round(appUpdateProgress ?? 0)))
 
   return (
-    <div className="pointer-events-none absolute right-5 top-3 z-40">
+    <div className="win-caption-offset pointer-events-none absolute right-5 top-3 z-40">
       <div
         className={`whitespace-nowrap text-[12px] tabular-nums tracking-tight text-label-secondary/90 ease-out will-change-transform transition-[transform,opacity] duration-300 ${
           animateIn ? 'translate-x-0 opacity-100' : 'translate-x-6 opacity-0'
@@ -400,7 +400,7 @@ export function UpdateBanner(): React.ReactElement {
 
   return (
     <>
-      <div className="pointer-events-none absolute inset-x-0 top-3 z-40 flex flex-col items-center gap-2 px-5">
+      <div className="win-caption-offset pointer-events-none absolute inset-x-0 top-3 z-40 flex flex-col items-center gap-2 px-5">
         <AppUpdateCenterToast key={appUpdateToastKey} />
         <ContentInstructionsToast />
         <WinboxUpdateToast />

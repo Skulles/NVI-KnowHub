@@ -4,8 +4,10 @@ import {
   extraRoutesToInstall,
   ifacesThatAreUp,
   interfacesForExtraRoutes,
-  starterCommand,
-  windowsRouteScript
+  registerTaskScript,
+  ROUTE_TASK_NAME,
+  routeHelperScript,
+  starterCommand
 } from './discoveryOnlinkRoute'
 
 const ethernet = { name: 'Ethernet', address: '192.168.10.236', netmask: '255.255.255.0' }
@@ -59,23 +61,20 @@ describe('temporary on-link routes', () => {
     expect(interfacesForExtraRoutes([wifi]).map((iface) => iface.name)).toEqual(['Беспроводная сеть'])
   })
 
-  it('builds an elevated on-link route script', () => {
-    const script = windowsRouteScript(
-      [{ iface: "Ethernet'", cidr: '192.168.0.0/24' }],
-      42,
-      'C:\\ready.txt',
-      'C:\\stop',
-      'C:\\done.txt'
-    )
-    expect(script).toContain("$parent = 42")
-    expect(script).toContain("Prefix = '192.168.0.0/24'")
-    expect(script).toContain("Alias = 'Ethernet'''")
-    expect(script).toContain('New-NetRoute')
-    expect(script).toContain('-RouteMetric 9000')
-    expect(script).toContain('Remove-NetRoute -Confirm:$false')
-    const starter = starterCommand('C:\\Users\\A B\\routes.ps1')
+  it('asks for administrator rights only while saving the scheduled task', () => {
+    const helper = routeHelperScript()
+    expect(helper).toContain('job.json')
+    expect(helper).toContain('New-NetRoute')
+    expect(helper).toContain('$metric = 9000')
+    expect(helper).toContain('-RouteMetric $metric')
+    expect(helper).toContain('Remove-NetRoute -Confirm:$false')
+    const register = registerTaskScript('C:\\Users\\A B\\helper.ps1', 'C:\\Users\\A B\\result.txt')
+    expect(register).toContain(`-TaskName '${ROUTE_TASK_NAME}'`)
+    expect(register).toContain('-RunLevel Highest')
+    expect(register).toContain("$helper = 'C:\\Users\\A B\\helper.ps1'")
+    const starter = starterCommand('C:\\Users\\A B\\register.ps1')
     expect(starter).toContain("$psi.Verb = 'RunAs'")
-    expect(starter).toContain('-File "C:\\Users\\A B\\routes.ps1"')
+    expect(starter).toContain('-File "C:\\Users\\A B\\register.ps1"')
   })
 
   it('installs the wanted routes once and removes them when the scan stops', async () => {

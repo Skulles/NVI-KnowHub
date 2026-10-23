@@ -5,7 +5,6 @@ import React, { useEffect, useLayoutEffect } from 'react'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { ContentArea } from './components/ContentArea/ContentArea'
 import { UpdateBanner } from './components/UpdateBanner/UpdateBanner'
-import { WindowTitleBar } from './components/WindowTitleBar/WindowTitleBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { initContentStore, MIN_INSTRUCTIONS_REFRESH_MS, useContentStore } from './store/content'
 import {
@@ -129,11 +128,11 @@ export default function App(): React.ReactElement {
 
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-surface-window text-label-primary selection:bg-tint-blue/22">
-      <WindowTitleBar />
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <UpdateBanner />
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
           <Sidebar />
+          <div className="window-content-drag drag-region" aria-hidden />
           <ErrorBoundary fallbackTitle="Ошибка отображения содержимого">
             <ContentArea />
           </ErrorBoundary>
