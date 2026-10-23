@@ -92,18 +92,40 @@ export function otherFromAlive(
   return found
 }
 
-/** One row per host. An L2 announcement wins over a generic L3 hit. */
+/**
+ * One row per host. Devices that share an IP stay separate when their MACs differ.
+ * The same MAC, or a later hit with no MAC of its own, collapses into the row already kept.
+ * An L2 announcement wins over a generic L3 hit.
+ */
 export function dedupeDiscoveryDevices(devices: DiscoveryDevice[]): DiscoveryDevice[] {
   const ranked = [...devices].sort((left, right) => KIND_RANK[left.kind] - KIND_RANK[right.kind])
-  const ips = new Set<string>()
   const macs = new Set<string>()
   const kept: DiscoveryDevice[] = []
+  const indexByIp = new Map<string, number>()
+
   for (const device of ranked) {
     const mac = usableMac(device.mac)
-    if (ips.has(device.ip) || (mac && macs.has(mac))) continue
-    ips.add(device.ip)
-    if (mac) macs.add(mac)
-    kept.push(mac === device.mac ? device : { ...device, mac })
+    if (mac && macs.has(mac)) continue
+    const next = mac === device.mac ? device : { ...device, mac }
+    const priorIndex = indexByIp.get(device.ip)
+    if (priorIndex === undefined) {
+      if (mac) macs.add(mac)
+      indexByIp.set(device.ip, kept.length)
+      kept.push(next)
+      continue
+    }
+
+    const prior = kept[priorIndex]
+    const priorMac = usableMac(prior.mac)
+    if (mac && priorMac && mac !== priorMac) {
+      macs.add(mac)
+      kept.push(next)
+      continue
+    }
+    if (mac && !priorMac && prior.kind === device.kind) {
+      macs.add(mac)
+      kept[priorIndex] = next
+    }
   }
   return kept
 }

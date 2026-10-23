@@ -61,7 +61,8 @@ type AnimatedRow = {
 }
 
 function rowKey(device: DiscoveryDevice): string {
-  return `${device.kind}:${device.ip}`
+  const mac = device.mac?.trim().toUpperCase() ?? ''
+  return `${device.kind}:${device.ip}:${mac}`
 }
 
 function useAnimatedRows(rows: DiscoveryDevice[]): AnimatedRow[] {
@@ -142,7 +143,7 @@ export function NetworkDiscovery() {
     for (const device of devices) {
       const kind: VisibleDiscoveryKind = device.kind === 'repka' ? 'other' : device.kind
       byKind[kind].push(device)
-      const key = `${device.kind}:${device.ip}`
+      const key = rowKey(device)
       seen.add(key)
       const previous = rememberedFields.current.get(key)
       const name = device.name?.trim() ?? ''
@@ -283,7 +284,7 @@ export function NetworkDiscovery() {
                   <tbody>
                     {rows.map(({ device, phase }) => {
                         const rowBorder = phase === 'out' ? 'border-b border-transparent' : 'border-b border-surface-divider/40'
-                        const remembered = rememberedFields.current.get(`${device.kind}:${device.ip}`)
+                        const remembered = rememberedFields.current.get(rowKey(device))
                         const name = remembered ? remembered.name : device.name
                         const board = remembered ? remembered.board : device.board
                         const model = board?.trim() && !isPlaceholderDiscoveryBoard(board) ? board.trim() : ''
@@ -292,7 +293,7 @@ export function NetworkDiscovery() {
                         const vendor = device.vendor?.trim() ?? ''
                         return (
                           <tr
-                            key={`${device.kind}-${device.ip}`}
+                            key={rowKey(device)}
                             className={`hover:bg-white/[0.03] ${phase === 'out' ? 'discovery-row-out' : 'discovery-row-in'}`}
                           >
                             <td className={`${MONO_CELL} ${ADDRESS_COL} ${rowBorder}`}>

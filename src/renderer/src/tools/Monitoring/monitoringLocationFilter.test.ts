@@ -61,8 +61,13 @@ describe('extractOeEndingWords', () => {
     expect(extractOeEndingWords('Западно-Мессояхское месторождение')).toEqual(['Западно-Мессояхское'])
   })
 
-  it('does not take a direction that is not directly before the name', () => {
-    expect(extractOeEndingWords('Западно от Покровское')).toEqual(['Покровское'])
+  it('keeps words that sit between a direction and the field name', () => {
+    expect(extractOeEndingWords('западно усть балыкское')).toEqual(['западно усть балыкское'])
+    expect(extractOeEndingWords('Западно Усть Балыкское месторождение')).toEqual([
+      'Западно Усть Балыкское'
+    ])
+    expect(extractOeEndingWords('Западно-Усть Балыкское')).toEqual(['Западно-Усть Балыкское'])
+    expect(extractOeEndingWords('Западно от Покровское')).toEqual(['Западно от Покровское'])
   })
 })
 
@@ -110,6 +115,18 @@ describe('buildOeLocationFilterOptions', () => {
     ])
   })
 
+  it('merges a direction with words between it and the field across hyphen spelling', () => {
+    const options = buildOeLocationFilterOptions([
+      stubObject({ id: 'owl1/', primaryLocationName: 'БУ Западно Усть Балыкское' }),
+      stubObject({ id: 'owl2/', primaryLocationName: 'Западно-Усть-Балыкское месторождение' }),
+      stubObject({ id: 'owl3/', primaryLocationName: 'Балыкское месторождение' })
+    ])
+    expect(options).toEqual([
+      { label: 'Балыкское', count: 1 },
+      { label: 'Западно Усть Балыкское', count: 2 }
+    ])
+  })
+
   it('keeps a spaced direction as its own location and merges it with the hyphenated spelling', () => {
     const options = buildOeLocationFilterOptions([
       stubObject({ id: 'owl1/', primaryLocationName: 'БУ Западно Мессояхское' }),
@@ -127,6 +144,12 @@ describe('findKnownLocationToken', () => {
   it('matches deposits and clusters from the catalog', () => {
     expect(findKnownLocationToken('участок, покурская залежь')).toBe('покурская залежь')
     expect(findKnownLocationToken('БУ Ванкорский кластер')).toBe('Ванкорский кластер')
+  })
+
+  it('keeps words between a direction and a catalog name', () => {
+    expect(findKnownLocationToken('Западно Усть Медвежье месторождение')).toBe(
+      'Западно Усть Медвежье'
+    )
   })
 
   it('keeps a direction written with a space or a hyphen before the catalog name', () => {
@@ -165,6 +188,14 @@ describe('objectMatchesOeLocationFilter', () => {
   it('matches across hyphen spelling', () => {
     expect(objectMatchesOeLocationFilter(hyphenObject, 'Покровское')).toBe(true)
     expect(objectMatchesOeLocationFilter(object, 'Покров-ское')).toBe(true)
+  })
+
+  it('matches a direction with words between it against the hyphenated field name', () => {
+    const spaced = stubObject({ primaryLocationName: 'БУ Западно Усть Балыкское' })
+    const hyphenated = stubObject({ primaryLocationName: 'Западно-Усть-Балыкское месторождение' })
+    expect(objectMatchesOeLocationFilter(spaced, 'Западно-Усть-Балыкское')).toBe(true)
+    expect(objectMatchesOeLocationFilter(hyphenated, 'Западно Усть Балыкское')).toBe(true)
+    expect(objectMatchesOeLocationFilter(spaced, 'Балыкское')).toBe(false)
   })
 
   it('matches a spaced direction against the hyphenated field name', () => {

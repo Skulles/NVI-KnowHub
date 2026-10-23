@@ -32,20 +32,21 @@ function buildReferenceNames(): string[] {
 const REFERENCE_NAMES = buildReferenceNames()
 
 /**
- * Direction immediately before a determined place name.
- * «Западно Мессояхское», «Северо-Западно Покровское», «Западно-Медвежье».
+ * Direction before a determined place name, with optional name words in between.
+ * «Западно Мессояхское», «Северо-Западно Покровское», «Западно Усть Балыкское».
  */
 const LEADING_DIRECTION_RE =
-  /(?:^|[^\p{L}])((?:северо|юго)[-\s]+(?:западно|восточно)|западно|восточно|северно|южно|северо|юго)([-\s]+)$/iu
+  /(?:^|[^\p{L}])((?:северо|юго)[-\s]+(?:западно|восточно)|западно|восточно|северно|южно|северо|юго)((?:[-\s]+[\p{L}]+)*)([-\s]+)$/iu
 
-/** Prepends a spaced or hyphenated direction that sits immediately before `tokenStart`. */
+/** Prepends a direction and any words that sit between it and `tokenStart`. */
 export function attachLeadingDirection(label: string, tokenStart: number, token: string): string {
   const match = label.slice(0, tokenStart).match(LEADING_DIRECTION_RE)
   const direction = match?.[1]
   if (!direction) return token
-  const separator = match[2] ?? ' '
+  const middle = match[2] ?? ''
+  const separator = match[3] ?? ' '
   const joiner = separator.includes('-') && !/\s/.test(separator) ? '-' : ' '
-  return `${direction}${joiner}${token}`
+  return `${direction}${middle}${joiner}${token}`
 }
 
 function findNormalizedMatchSpan(

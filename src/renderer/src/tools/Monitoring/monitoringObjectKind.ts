@@ -35,7 +35,7 @@ export function formatUndeterminedObjectKindTitle(count: number): string {
 }
 
 export const UNDETERMINED_OBJECT_KIND_HINT =
-  'Не удалось определить тип или объект ещё не появлялся в сети.\n[Можно указать вручную в свойствах объекта]'
+  'Не удалось определить тип или объект ещё не появлялся в сети.\n[Можно указать в свойствах объекта]'
 
 export function formatUndeterminedObjectKindHint(count: number): string {
   return `${formatUndeterminedObjectKindTitle(count)} — ${UNDETERMINED_OBJECT_KIND_HINT}`
@@ -47,6 +47,9 @@ const MIN_MARGIN = 2
 
 const WITS_DEVICE_TYPES = new Set(['wits', 'witsml'])
 const TKRS_NAME_TOKENS = new Set(['ТКРС', 'КРС', 'ПРС'])
+const FUNNEL_TOKEN_PREFIX = 'ВОРОНК'
+const FUNNEL_GENITIVE_PREFIX = 'ВОРОНОК'
+const PUMP_TOKEN_PREFIX = 'НАСОС'
 
 function normalizeName(value: string): string {
   return value.trim().toUpperCase().replace(/Ё/g, 'Е')
@@ -106,6 +109,30 @@ function hasWitsSensors(object: MonitoringObject): boolean | null {
   return object.guardDevices.some((device) => WITS_DEVICE_TYPES.has(device.type.trim().toLowerCase()))
 }
 
+function isFunnelToken(token: string): boolean {
+  return token.startsWith(FUNNEL_TOKEN_PREFIX) || token.startsWith(FUNNEL_GENITIVE_PREFIX)
+}
+
+function isPumpToken(token: string): boolean {
+  return token.startsWith(PUMP_TOKEN_PREFIX)
+}
+
+/** Both funnels and pumps in the location list: same weight as a name token. */
+function hasDrillingPlantLocations(object: MonitoringObject): boolean {
+  let funnels = false
+  let pumps = false
+
+  for (const location of object.locations ?? []) {
+    for (const token of nameTokens(location.localizedName)) {
+      if (isFunnelToken(token)) funnels = true
+      if (isPumpToken(token)) pumps = true
+    }
+    if (funnels && pumps) return true
+  }
+
+  return false
+}
+
 /** Scores cached OWL.Guard signs. Ignores a locked (non-auto) kind. */
 export function inferMonitoringObjectKind(object: MonitoringObject): MonitoringObjectKind {
   let drilling = 0
@@ -114,6 +141,8 @@ export function inferMonitoringObjectKind(object: MonitoringObject): MonitoringO
   const name = scoreName(object)
   drilling += name.drilling
   tkrs += name.tkrs
+
+  if (hasDrillingPlantLocations(object)) drilling += NAME_SCORE
 
   const cameras = knownCameraCount(object)
   if (cameras !== null) {

@@ -2,10 +2,12 @@
  * Local-channel discovery IPC.
  * MikroTik — MNDP (UDP 5678).
  * Cameras — ONVIF, SADP, ConfigTool/Dahua, DVRIP, SSDP/UPnP, Bonjour/mDNS.
- * Other — ICMP on the laptop's own subnets. L2 hits stay only when the device answered.
+ * Other — ICMP on the laptop's own subnets, plus 192.168.0.0/24, 192.168.1.0/24,
+ * and 192.168.3.152. On Windows those prefixes get a temporary on-link route so a
+ * shared switch answers without a gateway. L2 hits stay only when the device answered.
  */
 import { createSocket, type Socket } from 'dgram'
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import os from 'os'
 import type { DiscoveryDevice, DiscoveryScanResult } from '../shared/api'
 import {
@@ -54,6 +56,7 @@ import {
 } from './discoveryWs'
 import { applyNeighborMacs, readNeighborMacs } from './discoveryNeighbors'
 import { pingLiveHosts } from './discoveryPing'
+import { clearExtraOnlinkRoutes, clearExtraOnlinkRoutesOnQuit, syncExtraOnlinkRoutes } from './discoveryOnlinkRoute'
 import { dedupeDiscoveryDevices, otherFromAlive, usableMac } from './discoveryFingerprint'
 import { readNetbiosNames } from './discoveryNbns'
 import { readHttpDeviceTitles } from './discoveryHttp'
@@ -509,7 +512,7 @@ async function discoverGroup(
 }
 
 function trackKey(device: DiscoveryDevice): string {
-  return `${device.kind}:${device.ip}`
+  return `${device.kind}:${usableMac(device.mac) || device.ip}`
 }
 
 function publishWatch(): void {
@@ -540,10 +543,10 @@ function snapshotWatch(): DiscoveryDevice[] {
 }
 
 function sameHost(left: DiscoveryDevice, right: DiscoveryDevice): boolean {
-  if (left.ip === right.ip) return true
   const leftMac = usableMac(left.mac)
   const rightMac = usableMac(right.mac)
-  return Boolean(leftMac && rightMac && leftMac === rightMac)
+  if (leftMac && rightMac) return leftMac === rightMac
+  return left.ip === right.ip
 }
 
 function isGenericKind(kind: DiscoveryDevice['kind']): boolean {
@@ -556,25 +559,28 @@ function upsertWatch(
 ): void {
   if (!watch || options.bye) return
   const now = Date.now()
-  const key = trackKey(device)
-  if (isGenericKind(device.kind)) {
+  const normalized = { ...device, mac: usableMac(device.mac), board: usableDiscoveryBoard(device.board) }
+  const key = trackKey(normalized)
+  if (isGenericKind(normalized.kind)) {
     for (const existing of watch.devices.values()) {
-      if (isGenericKind(existing.kind) || !sameHost(existing, device)) continue
+      if (isGenericKind(existing.kind) || !sameHost(existing, normalized)) continue
       return
     }
   }
-  for (const [existingKey, existing] of watch.devices) {
-    if (existingKey === key || !sameHost(existing, device)) continue
+  let folded: TrackedDevice | undefined
+  for (const [existingKey, existing] of [...watch.devices]) {
+    if (existingKey === key || !sameHost(existing, normalized)) continue
     const weaker =
-      isGenericKind(existing.kind) || (device.kind === 'mikrotik' && existing.kind === 'cameras')
-    if (!weaker) continue
+      isGenericKind(existing.kind) || (normalized.kind === 'mikrotik' && existing.kind === 'cameras')
+    const sameKind = existing.kind === normalized.kind
+    if (!weaker && !sameKind) continue
     watch.devices.delete(existingKey)
     if (![...watch.devices.values()].some((item) => item.ip === existing.ip)) {
       watch.described.delete(existing.ip)
     }
+    if (sameKind && !weaker) folded = existing
   }
-  const current = watch.devices.get(key)
-  const normalized = { ...device, mac: usableMac(device.mac), board: usableDiscoveryBoard(device.board) }
+  const current = folded ?? watch.devices.get(key)
   const merged = current ? mergeDiscoveryDevice(current, normalized) : normalized
   const advertisedMs = options.maxAgeSec ? options.maxAgeSec * 1000 + 20_000 : DEFAULT_STALE_MS
   const staleMs = Math.min(advertisedMs, DEFAULT_STALE_MS)
@@ -585,7 +591,7 @@ function upsertWatch(
     online: true,
     probeSeen: Boolean(options.fromProbe || current?.probeSeen)
   }
-  watch.devices.set(key, next)
+  watch.devices.set(trackKey(next), next)
 }
 
 function dropMissedProbeDevices(probeKeys: Set<string>, roundStarted: number): void {
@@ -595,7 +601,9 @@ function dropMissedProbeDevices(probeKeys: Set<string>, roundStarted: number): v
     if (device.kind !== 'mikrotik' && device.kind !== 'cameras') continue
     if (!device.probeSeen || probeKeys.has(key) || device.seenAt >= roundStarted) continue
     watch.devices.delete(key)
-    watch.described.delete(device.ip)
+    if (![...watch.devices.values()].some((item) => item.ip === device.ip)) {
+      watch.described.delete(device.ip)
+    }
     logger.info(`discovery drop ${key}`)
   }
 }
@@ -607,7 +615,9 @@ function sweepWatch(): boolean {
   for (const [key, device] of watch.devices) {
     if (isTrackedLive(device, now)) continue
     watch.devices.delete(key)
-    watch.described.delete(device.ip)
+    if (![...watch.devices.values()].some((item) => item.ip === device.ip)) {
+      watch.described.delete(device.ip)
+    }
     changed = true
   }
   return changed
@@ -619,8 +629,12 @@ async function describeWatchDevice(ip: string, location: string): Promise<void> 
   const xml = await fetchUpnpDescription(location)
   if (!watch || !xml) return
   const extra = parseUpnpDeviceDescription(xml)
-  const current = [...watch.devices.values()].find((device) => device.ip === ip)
-  if (!current?.online) return
+  const matches = [...watch.devices.values()].filter((device) => device.online && device.ip === ip)
+  const extraMac = usableMac(extra.mac)
+  const current =
+    (extraMac ? matches.find((device) => usableMac(device.mac) === extraMac) : undefined) ??
+    (matches.length === 1 ? matches[0] : undefined)
+  if (!current) return
   upsertWatch({
     ...current,
     mac: extra.mac || current.mac,
@@ -676,6 +690,8 @@ async function runProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<vo
   const roundStarted = Date.now()
   const ifaces = listScanInterfaces()
   const localIps = new Set(ifaces.map((iface) => iface.address))
+  await syncExtraOnlinkRoutes(ifaces)
+  if (signal.aborted) return
   const [mikrotik, cameras, pingAlive] = await Promise.all([
     discoverGroup('mndp', discoverMikrotik, signal),
     discoverGroup('onvif', (inner) => discoverCameras(inner, { skipSsdp }), signal),
@@ -689,7 +705,11 @@ async function runProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<vo
     macs: new Set(announced.map((device) => device.mac))
   })
   const probed = applyNeighborMacs([...announced, ...others], neighbors)
-  const unnamed = probed.filter((device) => !device.name?.trim()).map((device) => device.ip)
+  const hostsOnIp = new Map<string, number>()
+  for (const device of probed) hostsOnIp.set(device.ip, (hostsOnIp.get(device.ip) ?? 0) + 1)
+  const unnamed = probed
+    .filter((device) => !device.name?.trim() && hostsOnIp.get(device.ip) === 1)
+    .map((device) => device.ip)
   const netbios = await readNetbiosNames(unnamed, signal)
   if (signal.aborted) return
   const httpNames = await readHttpDeviceTitles(
@@ -698,7 +718,8 @@ async function runProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise<vo
   )
   if (signal.aborted) return
   for (const device of probed) {
-    const name = device.name?.trim() ? device.name : (netbios.get(device.ip) ?? httpNames.get(device.ip) ?? null)
+    const sharedName = hostsOnIp.get(device.ip) === 1 ? (netbios.get(device.ip) ?? httpNames.get(device.ip) ?? null) : null
+    const name = device.name?.trim() ? device.name : sharedName
     upsertWatch(name === device.name ? device : { ...device, name }, { fromProbe: true })
   }
   dropMissedProbeDevices(new Set(probed.map((device) => trackKey(device))), roundStarted)
@@ -732,6 +753,7 @@ function stopWatch(): void {
   for (const socket of watch.sockets) closeSocket(socket)
   watch = null
   activeScan = null
+  void clearExtraOnlinkRoutes()
 }
 
 async function startWatch(): Promise<DiscoveryScanResult> {
@@ -775,6 +797,12 @@ async function runDiscoveryScan(): Promise<DiscoveryScanResult> {
 }
 
 export function setupDiscovery(): void {
+  app.on('will-quit', (event) => {
+    clearExtraOnlinkRoutesOnQuit(
+      () => app.quit(),
+      () => event.preventDefault()
+    )
+  })
   ipcMain.handle('discovery:scan', async (): Promise<DiscoveryScanResult> => runDiscoveryScan())
   ipcMain.handle('discovery:watch', async (): Promise<DiscoveryScanResult> => startWatch())
   ipcMain.handle('discovery:cancel', async (): Promise<{ ok: boolean }> => {

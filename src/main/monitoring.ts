@@ -29,6 +29,7 @@ import type {
   MonitoringVersionResult
 } from '../shared/api'
 import { collectLanHints } from './monitoringNetwork'
+import { readPingProbe } from './monitoringPing'
 
 /** Per-reply wait; VPN RTT often 300–900ms with occasional drops. */
 const PING_TIMEOUT_MS = 5000
@@ -717,51 +718,6 @@ function decodePingOutput(stdout: Buffer | string, stderr: Buffer | string): str
   return chunks.map(decode).join('\n')
 }
 
-function countPingReplies(output: string): number {
-  const ttlHits = [...output.matchAll(/\bTTL=/gi)]
-  if (ttlHits.length) return ttlHits.length
-
-  // English / partial localized forms when code page mangled Cyrillic.
-  const byteHits = [...output.matchAll(/\b(?:bytes\s+from|bytes\s*[=:]|байт\s*[=:])/gi)]
-  return byteHits.length
-}
-
-function parseLatencyMs(output: string): number | null {
-  const summaryMatch = output.match(/(?:round-trip|rtt)[^=]*=\s*[0-9]+(?:[.,][0-9]+)?\/([0-9]+(?:[.,][0-9]+)?)\//i)
-  if (summaryMatch) {
-    const latency = Number(summaryMatch[1].replace(',', '.'))
-    return Number.isFinite(latency) ? latency : null
-  }
-
-  const windowsAverageMatch = output.match(
-    /(?:Average|Среднее|Средний|Средняя)\s*=\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:ms|мс|мсек)?/i
-  )
-  if (windowsAverageMatch) {
-    const latency = Number(windowsAverageMatch[1].replace(',', '.'))
-    return Number.isFinite(latency) ? latency : null
-  }
-
-  // "время=820мс" / "time=820ms" — optional spaces (RU Windows often has none).
-  const samples = [
-    ...output.matchAll(/(?:time|время)\s*[=<]\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:ms|мс|мсек)?/gi)
-  ]
-    .map((match) => Number(match[1].replace(',', '.')))
-    .filter(Number.isFinite)
-
-  if (samples.length) {
-    return samples.reduce((sum, value) => sum + value, 0) / samples.length
-  }
-
-  // Localized Windows ping often arrives in a legacy code page; match latency before TTL instead.
-  const ttlSamples = [...output.matchAll(/[<>=](\d+(?:[.,]\d+)?)[^\d\n\r]*TTL=/gi)]
-    .map((match) => Number(match[1].replace(',', '.')))
-    .filter(Number.isFinite)
-
-  if (!ttlSamples.length) return null
-
-  return ttlSamples.reduce((sum, value) => sum + value, 0) / ttlSamples.length
-}
-
 function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult> {
   return new Promise((resolve) => {
     const count = target.fast ? 1 : PING_COUNT
@@ -771,16 +727,15 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
       { timeout: PING_TIMEOUT_MS * count + 3000, encoding: 'buffer' },
       (error, stdout, stderr) => {
         const output = decodePingOutput(stdout, stderr)
-        const latencyMs = parseLatencyMs(output)
-        const replyCount = countPingReplies(output)
+        const probe = readPingProbe(output)
 
         // Any successful echo ⇒ online (VPN often drops 1 of N packets).
-        if (replyCount > 0 || latencyMs !== null) {
+        if (probe.online) {
           resolve({
             ...target,
             status: 'online',
-            latencyMs,
-            replyCount,
+            latencyMs: probe.latencyMs,
+            replyCount: probe.replyCount,
             sentCount: count,
             checkedAt: Date.now()
           })
@@ -790,9 +745,9 @@ function pingTarget(target: MonitoringPingTarget): Promise<MonitoringPingResult>
         if (!error) {
           resolve({
             ...target,
-            status: 'online',
+            status: 'offline',
             latencyMs: null,
-            replyCount: count,
+            replyCount: 0,
             sentCount: count,
             checkedAt: Date.now()
           })

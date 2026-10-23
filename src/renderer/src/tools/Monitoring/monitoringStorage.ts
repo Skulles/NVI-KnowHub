@@ -163,7 +163,7 @@ function normalizeLocations(value: unknown): MonitoringLocation[] | undefined {
   return locations
 }
 
-/** Most frequently referenced parent location name (by `parentId`). */
+/** Card location: the most referenced parent, or the smallest id when nothing has a parent. */
 export function resolvePrimaryLocationName(locations?: MonitoringLocation[] | null): string | null {
   if (!locations?.length) return null
 
@@ -172,7 +172,11 @@ export function resolvePrimaryLocationName(locations?: MonitoringLocation[] | nu
     if (typeof location.parentId !== 'number') continue
     counts.set(location.parentId, (counts.get(location.parentId) ?? 0) + 1)
   }
-  if (counts.size === 0) return null
+  if (counts.size === 0) {
+    const earliest = locations.reduce((best, location) => (location.id < best.id ? location : best))
+    const name = earliest.localizedName.trim()
+    return name || null
+  }
 
   let bestParentId: number | null = null
   let bestCount = 0

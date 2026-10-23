@@ -14,11 +14,8 @@ export function normalizeOeLocationToken(word: string): string {
   return word.toLocaleLowerCase('ru').replace(/-/g, '')
 }
 
-const DIRECTION_KEY_PREFIX_RE =
-  /^(?:северозападно|северовосточно|югозападно|юговосточно|западно|восточно|северно|южно|северо|юго)\s+/u
-
 export function locationFilterTokenKey(label: string): string {
-  return normalizeOeLocationToken(label).replace(DIRECTION_KEY_PREFIX_RE, (prefix) => prefix.trimEnd())
+  return normalizeOeLocationToken(label).replace(/\s+/g, '')
 }
 
 export function extractOeEndingWords(locationLabel: string): string[] {

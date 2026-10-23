@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  collectExtraCidrTargets,
   collectOfflinkExtraTargets,
   collectOnlinkPingTargets,
   collectPingTargets,
@@ -44,12 +45,40 @@ describe('on-link scan ranges', () => {
     expect(onlink).not.toContain('192.168.3.152')
     expect(collectOfflinkExtraTargets(ifaces)).toContain('192.168.3.152')
     expect(collectOfflinkExtraTargets(ifaces)).not.toContain('192.168.3.1')
+    expect(collectExtraCidrTargets(ifaces)).toContain('192.168.3.152')
+    expect(collectExtraCidrTargets(ifaces)).not.toContain('192.168.3.1')
     expect(collectPingTargets(ifaces)).toContain('192.168.3.152')
+  })
+
+  it('ICMP-pings 192.168.0.0/24 and 192.168.1.0/24 when the NIC is elsewhere', () => {
+    const ifaces = [{ name: 'en0', address: '192.168.10.236', netmask: '255.255.255.0' }]
+    const extra = collectExtraCidrTargets(ifaces)
+    expect(extra).toHaveLength(254 * 2 + 1)
+    expect(extra).toContain('192.168.3.152')
+    expect(extra).toContain('192.168.0.1')
+    expect(extra).toContain('192.168.1.254')
+    expect(extra).not.toContain('192.168.0.0')
+    expect(extra).not.toContain('192.168.1.255')
+    expect(extra).not.toContain('192.168.10.1')
+    expect(collectPingTargets(ifaces)).toContain('192.168.0.10')
+    expect(collectPingTargets(ifaces)).toContain('192.168.1.10')
+  })
+
+  it('does not repeat 192.168.0.0/24 when the NIC is already there', () => {
+    const ifaces = [{ name: 'en0', address: '192.168.0.20', netmask: '255.255.255.0' }]
+    const extra = collectExtraCidrTargets(ifaces)
+    expect(extra.some((ip) => ip.startsWith('192.168.0.'))).toBe(false)
+    expect(extra).toContain('192.168.1.1')
+    expect(extra).toContain('192.168.3.152')
+    expect(extra).toHaveLength(255)
   })
 
   it('does not treat 192.168.3.152 as off-link when the NIC is already there', () => {
     expect(
       collectOfflinkExtraTargets([{ name: 'en4', address: '192.168.3.123', netmask: '255.255.255.0' }])
+    ).not.toContain('192.168.3.152')
+    expect(
+      collectExtraCidrTargets([{ name: 'en4', address: '192.168.3.123', netmask: '255.255.255.0' }])
     ).not.toContain('192.168.3.152')
   })
 
@@ -159,6 +188,48 @@ describe('L3 hosts in the other table', () => {
     expect(devices.map((device) => `${device.kind}:${device.ip}`)).toEqual([
       'mikrotik:192.168.10.20',
       'other:192.168.10.1'
+    ])
+  })
+
+  it('keeps every device that shares an IP when the MACs differ', () => {
+    const devices = dedupeDiscoveryDevices([
+      {
+        ip: '192.168.10.20',
+        mac: '48:8F:5A:01:02:03',
+        name: 'bridge',
+        board: 'hAP ac2',
+        vendor: 'MikroTik',
+        kind: 'mikrotik'
+      },
+      {
+        ip: '192.168.10.20',
+        mac: 'AA:BB:CC:DD:EE:01',
+        name: 'cam-a',
+        board: null,
+        vendor: 'Hikvision',
+        kind: 'cameras'
+      },
+      {
+        ip: '192.168.10.20',
+        mac: 'AA:BB:CC:DD:EE:02',
+        name: 'cam-b',
+        board: null,
+        vendor: 'Hikvision',
+        kind: 'cameras'
+      },
+      {
+        ip: '192.168.10.20',
+        mac: '',
+        name: null,
+        board: null,
+        vendor: '',
+        kind: 'other'
+      }
+    ])
+    expect(devices.map((device) => `${device.kind}:${device.mac}`)).toEqual([
+      'mikrotik:48:8F:5A:01:02:03',
+      'cameras:AA:BB:CC:DD:EE:01',
+      'cameras:AA:BB:CC:DD:EE:02'
     ])
   })
 })

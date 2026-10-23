@@ -152,6 +152,81 @@ describe('inferMonitoringObjectKind', () => {
     ).toBe('drilling')
   })
 
+  it('treats funnels and pumps in locations as a drilling sign', () => {
+    expect(
+      inferMonitoringObjectKind(
+        object({
+          locations: [
+            { id: 1, localizedName: 'Воронка' },
+            { id: 2, localizedName: 'Насосы' }
+          ]
+        })
+      )
+    ).toBe('drilling')
+  })
+
+  it('accepts inflected funnel and pump location names', () => {
+    expect(
+      inferMonitoringObjectKind(
+        object({
+          locations: [
+            { id: 1, localizedName: 'Блок воронок' },
+            { id: 2, localizedName: 'Насосная' }
+          ]
+        })
+      )
+    ).toBe('drilling')
+  })
+
+  it('accepts both words in one location name', () => {
+    expect(
+      inferMonitoringObjectKind(
+        object({
+          locations: [{ id: 1, localizedName: 'Воронки и насосы' }]
+        })
+      )
+    ).toBe('drilling')
+  })
+
+  it('does not treat funnels alone as drilling', () => {
+    expect(
+      inferMonitoringObjectKind(
+        object({
+          locations: [{ id: 1, localizedName: 'Воронка' }]
+        })
+      )
+    ).toBe('auto')
+  })
+
+  it('does not treat pumps alone as drilling', () => {
+    expect(
+      inferMonitoringObjectKind(
+        object({
+          locations: [{ id: 1, localizedName: 'Насосы' }]
+        })
+      )
+    ).toBe('auto')
+  })
+
+  it('keeps a clear TKRS name and equipment over funnels and pumps', () => {
+    expect(
+      inferMonitoringObjectKind(
+        object({
+          camerasTotal: 4,
+          cameraStreams: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }],
+          megaphonesTotal: 1,
+          megaphones: [{ id: 1, locationIds: [] }],
+          guardDevices: [mockDevice(1, 'ive50')],
+          primaryLocationName: 'КРС-3',
+          locations: [
+            { id: 1, localizedName: 'Воронка' },
+            { id: 2, localizedName: 'Насосы' }
+          ]
+        })
+      )
+    ).toBe('tkrs')
+  })
+
   it('counts empty loaded sensor list as not-WITS', () => {
     expect(
       inferMonitoringObjectKind(

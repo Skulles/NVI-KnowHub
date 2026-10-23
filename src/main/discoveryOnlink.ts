@@ -1,10 +1,13 @@
 /**
- * On-link IPv4 ranges plus a small extra host list for field Repka Pi boards.
- * Extra: 192.168.3.152 always; 10.{64-80}.{0-99}.{40-50} on a full scan (~18.7k).
+ * On-link IPv4 ranges plus extra hosts the laptop may not sit in.
+ * Always ping 192.168.0.0/24, 192.168.1.0/24, and 192.168.3.152 when they are off-link.
+ * Repka extras: 192.168.3.152 always; 10.{64-80}.{0-99}.{40-50} on a full scan (~18.7k).
  */
 import { intToIpv4, ipv4ToInt, isIPv4 } from './discoveryMndp'
 
 export const EXTRA_SINGLE_IPS = ['192.168.3.152'] as const
+export const EXTRA_SCAN_CIDRS = ['192.168.0.0/24', '192.168.1.0/24'] as const
+export const EXTRA_HOST_CIDRS = EXTRA_SINGLE_IPS.map((ip) => `${ip}/32`)
 export const MAX_SCAN_PREFIX = 22
 
 const REPKA_OCTET2_MIN = 64
@@ -104,6 +107,25 @@ export function listRepkaFieldGrid(): string[] {
   return hosts
 }
 
+export function collectExtraCidrTargets(ifaces: OnlinkIface[]): string[] {
+  const skip = new Set(ifaces.map((iface) => iface.address))
+  const seen = new Set<string>()
+  const hosts: string[] = []
+  for (const cidr of EXTRA_SCAN_CIDRS) {
+    for (const ip of hostsInCidr(cidr, skip)) {
+      if (seen.has(ip) || ipOnlinkAny(ip, ifaces)) continue
+      seen.add(ip)
+      hosts.push(ip)
+    }
+  }
+  for (const ip of EXTRA_SINGLE_IPS) {
+    if (skip.has(ip) || seen.has(ip) || ipOnlinkAny(ip, ifaces)) continue
+    seen.add(ip)
+    hosts.push(ip)
+  }
+  return hosts
+}
+
 export function collectOfflinkExtraTargets(
   ifaces: OnlinkIface[],
   options: { includeGrid?: boolean } = {}
@@ -124,5 +146,11 @@ export function collectOfflinkExtraTargets(
 }
 
 export function collectPingTargets(ifaces: OnlinkIface[]): string[] {
-  return [...new Set([...collectOnlinkPingTargets(ifaces), ...EXTRA_SINGLE_IPS.filter((ip) => !ifaces.some((iface) => iface.address === ip))])]
+  return [
+    ...new Set([
+      ...collectOnlinkPingTargets(ifaces),
+      ...collectExtraCidrTargets(ifaces),
+      ...EXTRA_SINGLE_IPS.filter((ip) => !ifaces.some((iface) => iface.address === ip))
+    ])
+  ]
 }

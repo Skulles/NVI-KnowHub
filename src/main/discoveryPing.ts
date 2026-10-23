@@ -1,8 +1,8 @@
 /**
- * ICMP sweep of on-link prefixes. Off-link extras use ARP on the NIC.
+ * ICMP sweep of on-link prefixes plus 192.168.0.0/24, 192.168.1.0/24, and 192.168.3.152 when off-link.
  */
 import { execFile } from 'child_process'
-import { collectOnlinkPingTargets, type OnlinkIface } from './discoveryOnlink'
+import { collectExtraCidrTargets, collectOnlinkPingTargets, type OnlinkIface } from './discoveryOnlink'
 import { isIPv4 } from './discoveryMndp'
 
 const PING_CONCURRENCY = 32
@@ -72,7 +72,9 @@ export function pingLiveHosts(
   knownIps: Set<string>,
   signal: AbortSignal
 ): Promise<string[]> {
-  const targets = collectOnlinkPingTargets(ifaces).filter((ip) => !knownIps.has(ip))
+  const targets = [...new Set([...collectOnlinkPingTargets(ifaces), ...collectExtraCidrTargets(ifaces)])].filter(
+    (ip) => !knownIps.has(ip)
+  )
   if (!targets.length || signal.aborted) return Promise.resolve([])
   return mapPool(targets, signal)
 }

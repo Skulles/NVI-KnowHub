@@ -67,6 +67,9 @@ function latencyTextClasses(latencyMs: number | null): string {
   if (latencyMs <= 300) return 'text-amber-300'
   return 'text-red-400'
 }
+function packetLossTextClasses(percent: number): string {
+  return percent > 50 ? 'text-red-400' : 'text-amber-300'
+}
 function linkConnectionText(status: MonitoringPingStatus | 'unknown', checking: boolean): string {
   if (checking || status === 'unknown') return 'Проверка соединения…'
   if (status === 'online') return 'Соединение установлено'
@@ -422,10 +425,12 @@ function buildLocationNameMap(locations?: MonitoringLocation[] | null): Map<numb
 
 function ScrollingLine({
   text,
-  className = ''
+  className = '',
+  trailing = null
 }: {
   text: string
   className?: string
+  trailing?: { text: string; className: string } | null
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const textRef = useRef<HTMLSpanElement>(null)
@@ -445,7 +450,7 @@ function ScrollingLine({
     observer.observe(container)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [text])
+  }, [text, trailing?.text])
 
   const durationSec = Math.max(6, Math.round(shiftPx / 18) + 4)
 
@@ -464,6 +469,7 @@ function ScrollingLine({
         }
       >
         {text}
+        {trailing ? <span className={trailing.className}>{trailing.text}</span> : null}
       </span>
     </div>
   )
@@ -839,9 +845,14 @@ function EndpointStatus({
   const showResources =
     kind === 'server' && !muted && status === 'online' && !!serverResources && !serverErrorDetail
   // Visible line: ping / connection text, with sticky flapping note when relevant.
-  const linkDetailBase = showPing
-    ? `${formatLatency(linkLatencyMs)}${packetLossLabel ? ` · ${packetLossLabel}` : ''}`
-    : linkConnectionText(status, checking)
+  const linkDetailBase = showPing ? formatLatency(linkLatencyMs) : linkConnectionText(status, checking)
+  const packetLossTrailing =
+    showPing && packetLossLabel && packetLossPercent !== null
+      ? {
+          text: ` · ${packetLossLabel}`,
+          className: packetLossTextClasses(packetLossPercent)
+        }
+      : null
   const detail =
     detailOverride ??
     (kind === 'link'
@@ -913,6 +924,7 @@ function EndpointStatus({
           ) : detail ? (
             <ScrollingLine
               text={detail}
+              trailing={packetLossTrailing}
               className={`mt-0.5 text-[13px] leading-[1.125rem] ${
                 showPing && !detailOverride ? `font-mono ${detailClass}` : detailClass
               }`}
