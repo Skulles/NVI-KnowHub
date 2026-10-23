@@ -2,7 +2,7 @@
  * Off-link extra hosts (192.168.3.152; on a full scan also 10.64-80.*.40-50).
  * ICMP follows the routing table and can leak into a VPN; ARP is bound to the NIC.
  */
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -87,33 +87,91 @@ $jobs = foreach ($dest in $ips) {
   }).AddArgument($dest).AddArgument($src)
   [pscustomobject]@{ Ps = $ps; Handle = $ps.BeginInvoke() }
 }
-foreach ($job in @($jobs)) {
-  try { $job.Ps.EndInvoke($job.Handle) } catch {}
-  $job.Ps.Dispose()
+$pending = [System.Collections.Generic.List[object]]::new()
+foreach ($job in @($jobs)) { [void]$pending.Add($job) }
+while ($pending.Count -gt 0) {
+  $foundOne = $false
+  for ($i = $pending.Count - 1; $i -ge 0; $i--) {
+    $job = $pending[$i]
+    if (-not $job.Handle.IsCompleted) { continue }
+    $foundOne = $true
+    try {
+      foreach ($line in @($job.Ps.EndInvoke($job.Handle))) {
+        if ($line) {
+          [Console]::Out.WriteLine([string]$line)
+          [Console]::Out.Flush()
+        }
+      }
+    } catch {}
+    $job.Ps.Dispose()
+    $pending.RemoveAt($i)
+  }
+  if (-not $foundOne) { Start-Sleep -Milliseconds 40 }
 }
 $pool.Close()
 $pool.Dispose()
 `
 }
 
-async function probeSendArpOne(srcIp: string, destIps: string[], signal: AbortSignal): Promise<Map<string, string>> {
-  if (signal.aborted || !destIps.length) return new Map()
+function streamPowerShell(
+  script: string,
+  signal: AbortSignal,
+  onLine: (line: string) => void
+): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
+      { windowsHide: true }
+    )
+    let buffer = ''
+    const take = (chunk: Buffer | string): void => {
+      buffer += chunk.toString()
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
+      for (const line of lines) onLine(line)
+    }
+    child.stdout?.on('data', take)
+    const onAbort = (): void => {
+      child.kill()
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    const timer = setTimeout(() => child.kill(), 90_000)
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      reject(error)
+    })
+    child.once('close', () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      if (buffer.trim()) onLine(buffer)
+      resolve()
+    })
+  })
+}
+
+async function probeSendArpOne(
+  srcIp: string,
+  destIps: string[],
+  signal: AbortSignal,
+  onFound?: (ip: string, mac: string) => void
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  if (signal.aborted || !destIps.length) return found
   const dir = mkdtempSync(join(tmpdir(), 'knowhub-arp-'))
   const listPath = join(dir, 'ips.txt')
   writeFileSync(listPath, destIps.join('\n'), 'utf8')
   try {
-    const { stdout } = await execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', sendArpParallelScript(srcIp, listPath)],
-      { timeout: 90_000, windowsHide: true, encoding: 'utf8', signal }
-    )
-    return parseSendArpLines(stdout)
-  } catch (error) {
-    const stdout =
-      error && typeof error === 'object' && 'stdout' in error ? String((error as { stdout?: unknown }).stdout ?? '') : ''
-    const found = parseSendArpLines(stdout)
-    if (found.size) return found
-    throw error
+    await streamPowerShell(sendArpParallelScript(srcIp, listPath), signal, (line) => {
+      for (const [ip, mac] of parseSendArpLines(line)) {
+        if (found.has(ip)) continue
+        found.set(ip, mac)
+        onFound?.(ip, mac)
+      }
+    })
+    return found
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -122,7 +180,8 @@ async function probeSendArpOne(srcIp: string, destIps: string[], signal: AbortSi
 export async function probeSendArp(
   sources: string[],
   destIps: string[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  onFound?: (ip: string, mac: string) => void
 ): Promise<Map<string, string>> {
   const found = new Map<string, string>()
   if (process.platform !== 'win32' || signal.aborted) return found
@@ -130,7 +189,7 @@ export async function probeSendArp(
   for (const src of sources) {
     if (signal.aborted || !remaining.length || !isIPv4(src)) break
     try {
-      for (const [ip, mac] of await probeSendArpOne(src, remaining, signal)) found.set(ip, mac)
+      for (const [ip, mac] of await probeSendArpOne(src, remaining, signal, onFound)) found.set(ip, mac)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (signal.aborted) break

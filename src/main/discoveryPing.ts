@@ -48,7 +48,7 @@ function pingHost(host: string, signal: AbortSignal): Promise<boolean> {
   })
 }
 
-async function mapPool(hosts: string[], signal: AbortSignal): Promise<string[]> {
+async function mapPool(hosts: string[], signal: AbortSignal, onAlive?: (ip: string) => void): Promise<string[]> {
   const alive: string[] = []
   let next = 0
 
@@ -58,7 +58,10 @@ async function mapPool(hosts: string[], signal: AbortSignal): Promise<string[]> 
       next += 1
       const host = hosts[index]
       if (!host || !isIPv4(host)) continue
-      if (await pingHost(host, signal)) alive.push(host)
+      if (await pingHost(host, signal)) {
+        alive.push(host)
+        onAlive?.(host)
+      }
     }
   }
 
@@ -71,10 +74,10 @@ export function pingLiveHosts(
   ifaces: OnlinkIface[],
   knownIps: Set<string>,
   signal: AbortSignal,
-  options: { includeExtras?: boolean } = {}
+  options: { includeExtras?: boolean; onAlive?: (ip: string) => void } = {}
 ): Promise<string[]> {
   const extras = options.includeExtras === false ? [] : collectExtraCidrTargets(ifaces)
   const targets = [...new Set([...collectOnlinkPingTargets(ifaces), ...extras])].filter((ip) => !knownIps.has(ip))
   if (!targets.length || signal.aborted) return Promise.resolve([])
-  return mapPool(targets, signal)
+  return mapPool(targets, signal, options.onAlive)
 }

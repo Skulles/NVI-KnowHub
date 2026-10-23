@@ -527,6 +527,16 @@ function trackKey(device: DiscoveryDevice): string {
   return `${device.kind}:${usableMac(device.mac) || device.ip}`
 }
 
+let publishTimer: ReturnType<typeof setTimeout> | null = null
+
+function publishWatchSoon(): void {
+  if (publishTimer) return
+  publishTimer = setTimeout(() => {
+    publishTimer = null
+    publishWatch()
+  }, 100)
+}
+
 function publishWatch(): void {
   if (!watch) return
   const warning = extraRouteWarning()
@@ -724,12 +734,41 @@ async function finishProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise
   const extraIps = extrasReady ? collectExtraCidrTargets(ifaces).filter((ip) => !localIps.has(ip)) : []
   const routeNames = new Set(extraRouteInterfaceNames())
   const arpSources = ifaces.filter((iface) => routeNames.has(iface.name)).map((iface) => iface.address)
-  const [mikrotik, cameras, pingAlive, arpMacs] = await Promise.all([
-    discoverGroup('mndp', discoverMikrotik, signal),
-    discoverGroup('onvif', (inner) => discoverCameras(inner, { skipSsdp }), signal),
-    pingLiveHosts(ifaces, localIps, signal, { includeExtras: extrasReady }),
+  const announced: DiscoveryDevice[] = []
+  const arpMacs = new Map<string, string>()
+  const pingAlive: string[] = []
+  const noteHost = (ip: string, mac = ''): void => {
+    if (!isIPv4(ip) || localIps.has(ip)) return
+    if (mac) arpMacs.set(ip, mac)
+    const [device] = otherFromAlive([ip], arpMacs, {
+      ips: new Set([...localIps, ...announced.map((item) => item.ip)]),
+      macs: new Set(announced.map((item) => item.mac))
+    })
+    if (!device) return
+    upsertWatch(device, { fromProbe: true })
+    publishWatchSoon()
+  }
+  const rememberAnnounced = (devices: DiscoveryDevice[]): void => {
+    announced.push(...devices)
+    for (const device of devices) {
+      upsertWatch(device, { fromProbe: true })
+    }
+    if (devices.length) publishWatchSoon()
+  }
+  await Promise.all([
+    discoverGroup('mndp', discoverMikrotik, signal).then((devices) => {
+      rememberAnnounced(devices)
+    }),
+    discoverGroup('onvif', (inner) => discoverCameras(inner, { skipSsdp }), signal).then((devices) => {
+      rememberAnnounced(devices)
+    }),
+    pingLiveHosts(ifaces, localIps, signal, { includeExtras: extrasReady, onAlive: (ip) => noteHost(ip) }).then(
+      (ips) => {
+        pingAlive.push(...ips)
+      }
+    ),
     process.platform === 'win32' && extraIps.length && arpSources.length
-      ? probeSendArp(arpSources, extraIps, signal).catch((error) => {
+      ? probeSendArp(arpSources, extraIps, signal, (ip, mac) => noteHost(ip, mac)).catch((error) => {
           logger.warn('discovery extra arp failed', error)
           return new Map<string, string>()
         })
@@ -738,7 +777,6 @@ async function finishProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise
   if (signal.aborted) return
   const neighbors = await readNeighborMacs()
   for (const [ip, mac] of arpMacs) neighbors.set(ip, mac)
-  const announced = [...mikrotik, ...cameras]
   const others = otherFromAlive([...pingAlive, ...arpMacs.keys()], neighbors, {
     ips: new Set([...localIps, ...announced.map((device) => device.ip)]),
     macs: new Set(announced.map((device) => device.mac))
@@ -792,6 +830,10 @@ function stopWatch(): void {
   for (const socket of watch.sockets) closeSocket(socket)
   watch = null
   activeScan = null
+  if (publishTimer) {
+    clearTimeout(publishTimer)
+    publishTimer = null
+  }
   void clearExtraOnlinkRoutes()
 }
 

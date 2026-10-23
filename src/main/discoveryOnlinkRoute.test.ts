@@ -4,6 +4,7 @@ import {
   extraRoutesToInstall,
   ifacesThatAreUp,
   interfacesForExtraRoutes,
+  launchVbsScript,
   registerTaskScript,
   ROUTE_TASK_NAME,
   routeHelperScript,
@@ -68,10 +69,13 @@ describe('temporary on-link routes', () => {
     expect(helper).toContain('$metric = 9000')
     expect(helper).toContain('-RouteMetric $metric')
     expect(helper).toContain('Remove-NetRoute -Confirm:$false')
-    const register = registerTaskScript('C:\\Users\\A B\\helper.ps1', 'C:\\Users\\A B\\result.txt')
+    const register = registerTaskScript('C:\\Users\\A B\\launch.vbs', 'C:\\Users\\A B\\result.txt')
     expect(register).toContain(`-TaskName '${ROUTE_TASK_NAME}'`)
     expect(register).toContain('-RunLevel Highest')
-    expect(register).toContain("$helper = 'C:\\Users\\A B\\helper.ps1'")
+    expect(register).toContain("-Execute 'wscript.exe'")
+    expect(register).toContain("$launch = 'C:\\Users\\A B\\launch.vbs'")
+    expect(launchVbsScript()).toContain('helper.ps1')
+    expect(launchVbsScript()).toContain('Run cmd, 0, False')
     const starter = starterCommand('C:\\Users\\A B\\register.ps1')
     expect(starter).toContain("$psi.Verb = 'RunAs'")
     expect(starter).toContain('-File "C:\\Users\\A B\\register.ps1"')

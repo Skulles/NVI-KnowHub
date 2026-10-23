@@ -132,20 +132,30 @@ try {
 `
 }
 
-export function registerTaskScript(helperPath: string, resultPath: string): string {
-  const helper = helperPath.replace(/'/g, "''")
+export function launchVbsScript(): string {
+  return [
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    'folder = fso.GetParentFolderName(WScript.ScriptFullName)',
+    'cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & folder & "\\helper.ps1"""',
+    'CreateObject("Wscript.Shell").Run cmd, 0, False'
+  ].join('\r\n')
+}
+
+export function registerTaskScript(launchPath: string, resultPath: string): string {
+  const launch = launchPath.replace(/'/g, "''")
   const result = resultPath.replace(/'/g, "''")
   return `
 $ErrorActionPreference = 'Stop'
 $result = '${result}'
 try {
-  $helper = '${helper}'
+  $launch = '${launch}'
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-  $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $helper + '"'
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+  $arg = '//B //Nologo "' + $launch + '"'
+  $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument $arg
   $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances Parallel
   $settings.ExecutionTimeLimit = 'PT24H'
+  $settings.Hidden = $true
   Register-ScheduledTask -TaskName '${ROUTE_TASK_NAME}' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
   Set-Content -LiteralPath $result -Value 'ok' -Encoding ascii
 } catch {
@@ -258,7 +268,9 @@ async function routeTaskExists(): Promise<boolean> {
 
 async function ensureRouteTask(helperPath: string): Promise<void> {
   const markerPath = join(routeDir(), 'task-path.txt')
-  const marked = existsSync(markerPath) && readFileSync(markerPath, 'utf8').replace(/^\uFEFF/, '').trim() === helperPath
+  const marked =
+    existsSync(markerPath) &&
+    readFileSync(markerPath, 'utf8').replace(/^\uFEFF/, '').trim() === `wscript|${helperPath}`
   if (marked && (await routeTaskExists())) return
   const dir = routeDir()
   const registerPath = join(dir, 'register.ps1')
@@ -271,7 +283,7 @@ async function ensureRouteTask(helperPath: string): Promise<void> {
   })
   const result = await waitForFile(resultPath, 20_000)
   if (result !== 'ok') throw new Error(result || 'Не удалось сохранить разрешение')
-  writeFileSync(markerPath, helperPath, 'utf8')
+  writeFileSync(markerPath, `wscript|${helperPath}`, 'utf8')
   logger.info('discovery route task installed')
 }
 
@@ -314,12 +326,14 @@ async function stopHelper(): Promise<void> {
 async function startHelper(routes: ExtraOnlinkRoute[]): Promise<void> {
   const dir = routeDir()
   const helperPath = join(dir, 'helper.ps1')
+  const launchPath = join(dir, 'launch.vbs')
   const readyPath = join(dir, 'ready.txt')
   const stopPath = join(dir, 'stop')
   const donePath = join(dir, 'done.txt')
   const jobPath = join(dir, 'job.json')
   writeRouteFile(helperPath, routeHelperScript())
-  await ensureRouteTask(helperPath)
+  writeFileSync(launchPath, launchVbsScript(), 'ascii')
+  await ensureRouteTask(launchPath)
   for (const path of [readyPath, stopPath, donePath]) rmSync(path, { force: true })
   writeRouteFile(
     jobPath,
@@ -392,6 +406,8 @@ async function readUpInterfaceNames(): Promise<string[]> {
       [
         '-NoProfile',
         '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
         '-Command',
         'Get-NetAdapter | Where-Object Status -eq Up | Select-Object -ExpandProperty Name'
       ],
