@@ -438,14 +438,12 @@ export function clearExtraOnlinkRoutes(): Promise<void> {
   })
 }
 
-let quitCleanup: Promise<void> | null = null
-
-export function clearExtraOnlinkRoutesOnQuit(quit: () => void, prevent: () => void): void {
-  if (!session.has()) return
-  prevent()
-  if (quitCleanup) return
-  quitCleanup = clearExtraOnlinkRoutes().finally(() => {
-    quitCleanup = null
-    quit()
-  })
+/** Let the elevated helper remove routes after this process exits. Do not block quit. */
+export function signalExtraOnlinkRoutesStop(): void {
+  if (!helper) return
+  try {
+    writeFileSync(helper.stopPath, 'stop', 'utf8')
+  } catch {
+    // the helper also exits when this process is gone
+  }
 }

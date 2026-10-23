@@ -60,10 +60,10 @@ import { collectExtraCidrTargets } from './discoveryOnlink'
 import { probeSendArp } from './discoveryArp'
 import {
   clearExtraOnlinkRoutes,
-  clearExtraOnlinkRoutesOnQuit,
   extraRouteInterfaceNames,
   extraRoutesActive,
   extraRouteWarning,
+  signalExtraOnlinkRoutesStop,
   syncExtraOnlinkRoutes
 } from './discoveryOnlinkRoute'
 import { dedupeDiscoveryDevices, otherFromAlive, usableMac } from './discoveryFingerprint'
@@ -925,11 +925,8 @@ async function runDiscoveryScan(): Promise<DiscoveryScanResult> {
 }
 
 export function setupDiscovery(): void {
-  app.on('will-quit', (event) => {
-    clearExtraOnlinkRoutesOnQuit(
-      () => app.quit(),
-      () => event.preventDefault()
-    )
+  app.on('will-quit', () => {
+    signalExtraOnlinkRoutesStop()
   })
   ipcMain.handle('discovery:scan', async (): Promise<DiscoveryScanResult> => runDiscoveryScan())
   ipcMain.handle('discovery:watch', async (): Promise<DiscoveryScanResult> => startWatch())

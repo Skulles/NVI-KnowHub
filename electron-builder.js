@@ -4,6 +4,7 @@
  */
 const { readFileSync, existsSync } = require('fs')
 const { join } = require('path')
+const { setWindowsExeLanguage } = require('./scripts/win-exe-language')
 
 function loadDotEnv() {
   const envPath = join(__dirname, '.env')
@@ -76,6 +77,8 @@ module.exports = {
   productName: 'NVI KnowHub',
   copyright: 'Copyright © NVI',
   asar: true,
+  // Chromium UI strings (file dialogs, menus). en-US is the built-in fallback pack.
+  electronLanguages: ['ru', 'en-US'],
   directories: {
     buildResources: 'build'
   },
@@ -146,5 +149,11 @@ module.exports = {
   publish: {
     provider: 'generic',
     url: releasesUrl
+  },
+  afterPack: async (context) => {
+    if (context.electronPlatformName !== 'win32') return
+
+    const exePath = join(context.appOutDir, `${context.packager.appInfo.productFilename}.exe`)
+    await setWindowsExeLanguage(exePath)
   }
 }
