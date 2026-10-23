@@ -68,7 +68,7 @@ import {
 } from './discoveryOnlinkRoute'
 import { dedupeDiscoveryDevices, otherFromAlive, usableMac } from './discoveryFingerprint'
 import { readNetbiosNames } from './discoveryNbns'
-import { readHttpDeviceTitles } from './discoveryHttp'
+import { readHttpDeviceTitle } from './discoveryHttp'
 import { logger } from './logger'
 
 const LISTEN_MS = 3500
@@ -737,6 +737,49 @@ async function finishProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise
   const announced: DiscoveryDevice[] = []
   const arpMacs = new Map<string, string>()
   const pingAlive: string[] = []
+  const foundNames = new Map<string, string>()
+  const naming = new Set<string>()
+  const nameQueue: string[] = []
+  let nameSlots = 0
+  const NAME_CONCURRENCY = 8
+
+  const applyFoundName = (ip: string, name: string): void => {
+    foundNames.set(ip, name)
+    if (!watch) return
+    const rows = [...watch.devices.values()].filter((device) => device.ip === ip)
+    if (rows.length !== 1 || rows[0]?.name?.trim()) return
+    upsertWatch({ ...rows[0], name }, { fromProbe: true })
+    publishWatchSoon()
+  }
+
+  const pumpNames = (): void => {
+    while (nameSlots < NAME_CONCURRENCY && nameQueue.length && !signal.aborted) {
+      const ip = nameQueue.shift()
+      if (!ip) break
+      nameSlots += 1
+      void (async () => {
+        try {
+          const netbios = await readNetbiosNames([ip], signal)
+          const name = netbios.get(ip) ?? (await readHttpDeviceTitle(ip, signal))
+          if (name && !signal.aborted) applyFoundName(ip, name)
+        } catch (error) {
+          logger.warn(`discovery name ${ip} failed`, error)
+        } finally {
+          nameSlots -= 1
+          naming.delete(ip)
+          pumpNames()
+        }
+      })()
+    }
+  }
+
+  const scheduleName = (ip: string, existingName?: string | null): void => {
+    if (existingName?.trim() || !isIPv4(ip) || localIps.has(ip) || naming.has(ip) || foundNames.has(ip)) return
+    naming.add(ip)
+    nameQueue.push(ip)
+    pumpNames()
+  }
+
   const noteHost = (ip: string, mac = ''): void => {
     if (!isIPv4(ip) || localIps.has(ip)) return
     if (mac) arpMacs.set(ip, mac)
@@ -745,13 +788,17 @@ async function finishProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise
       macs: new Set(announced.map((item) => item.mac))
     })
     if (!device) return
-    upsertWatch(device, { fromProbe: true })
+    const known = foundNames.get(ip) ?? null
+    upsertWatch(known ? { ...device, name: known } : device, { fromProbe: true })
+    if (!known) scheduleName(ip)
     publishWatchSoon()
   }
   const rememberAnnounced = (devices: DiscoveryDevice[]): void => {
     announced.push(...devices)
     for (const device of devices) {
-      upsertWatch(device, { fromProbe: true })
+      const known = !device.name?.trim() ? (foundNames.get(device.ip) ?? null) : null
+      upsertWatch(known ? { ...device, name: known } : device, { fromProbe: true })
+      if (!device.name?.trim() && !known) scheduleName(device.ip)
     }
     if (devices.length) publishWatchSoon()
   }
@@ -784,20 +831,12 @@ async function finishProbeRound(signal: AbortSignal, skipSsdp: boolean): Promise
   const probed = applyNeighborMacs([...announced, ...others], neighbors)
   const hostsOnIp = new Map<string, number>()
   for (const device of probed) hostsOnIp.set(device.ip, (hostsOnIp.get(device.ip) ?? 0) + 1)
-  const unnamed = probed
-    .filter((device) => !device.name?.trim() && hostsOnIp.get(device.ip) === 1)
-    .map((device) => device.ip)
-  const netbios = await readNetbiosNames(unnamed, signal)
-  if (signal.aborted) return
-  const httpNames = await readHttpDeviceTitles(
-    unnamed.filter((ip) => !netbios.has(ip)),
-    signal
-  )
-  if (signal.aborted) return
   for (const device of probed) {
-    const sharedName = hostsOnIp.get(device.ip) === 1 ? (netbios.get(device.ip) ?? httpNames.get(device.ip) ?? null) : null
-    const name = device.name?.trim() ? device.name : sharedName
-    upsertWatch(name === device.name ? device : { ...device, name }, { fromProbe: true })
+    const shared = hostsOnIp.get(device.ip) === 1
+    const known = shared ? (foundNames.get(device.ip) ?? null) : null
+    const name = device.name?.trim() ? device.name : known
+    upsertWatch(!name || name === device.name ? device : { ...device, name }, { fromProbe: true })
+    if (shared && !name) scheduleName(device.ip, device.name)
   }
   dropMissedProbeDevices(new Set(probed.map((device) => trackKey(device))), roundStarted)
   sweepWatch()
