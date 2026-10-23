@@ -289,6 +289,7 @@ async function ensureRouteTask(helperPath: string): Promise<void> {
 
 let helper: RouteHelper | null = null
 let warning: string | null = null
+let routesClosed = false
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -324,6 +325,7 @@ async function stopHelper(): Promise<void> {
 }
 
 async function startHelper(routes: ExtraOnlinkRoute[]): Promise<void> {
+  if (routesClosed) return
   const dir = routeDir()
   const helperPath = join(dir, 'helper.ps1')
   const launchPath = join(dir, 'launch.vbs')
@@ -334,7 +336,16 @@ async function startHelper(routes: ExtraOnlinkRoute[]): Promise<void> {
   writeRouteFile(helperPath, routeHelperScript())
   writeFileSync(launchPath, launchVbsScript(), 'ascii')
   await ensureRouteTask(launchPath)
+  if (routesClosed) return
   for (const path of [readyPath, stopPath, donePath]) rmSync(path, { force: true })
+  if (routesClosed) {
+    try {
+      writeFileSync(stopPath, 'stop', 'utf8')
+    } catch {
+      // quit already asked the helper to stop
+    }
+    return
+  }
   writeRouteFile(
     jobPath,
     JSON.stringify({
@@ -348,13 +359,30 @@ async function startHelper(routes: ExtraOnlinkRoute[]): Promise<void> {
   try {
     await execFileAsync('schtasks.exe', ['/Run', '/TN', ROUTE_TASK_NAME], { timeout: 15_000, windowsHide: true })
   } catch (error) {
+    if (routesClosed) return
     logger.warn('discovery route task run failed, asking for rights again', error)
     await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', starterCommand(helperPath)], {
       timeout: 120_000,
       windowsHide: true
     })
   }
+  if (routesClosed) {
+    try {
+      writeFileSync(stopPath, 'stop', 'utf8')
+    } catch {
+      // quit already asked the helper to stop
+    }
+    return
+  }
   const ready = await waitForFile(readyPath, 20_000)
+  if (routesClosed) {
+    try {
+      writeFileSync(stopPath, 'stop', 'utf8')
+    } catch {
+      // quit already asked the helper to stop
+    }
+    return
+  }
   if (ready !== 'ok') {
     try {
       writeFileSync(stopPath, 'stop', 'utf8')
@@ -369,8 +397,9 @@ async function startHelper(routes: ExtraOnlinkRoute[]): Promise<void> {
 }
 
 async function applyWindowsRoutes(routes: ExtraOnlinkRoute[]): Promise<void> {
+  if (routesClosed) return
   await stopHelper()
-  if (!routes.length) return
+  if (routesClosed || !routes.length) return
   await startHelper(routes)
 }
 
@@ -421,7 +450,7 @@ async function readUpInterfaceNames(): Promise<string[]> {
 }
 
 export async function syncExtraOnlinkRoutes(ifaces: OnlinkIface[]): Promise<void> {
-  if (process.platform !== 'win32') return
+  if (routesClosed || process.platform !== 'win32') return
   try {
     const live = ifacesThatAreUp(ifaces, await readUpInterfaceNames())
     await session.sync(live)
@@ -433,6 +462,7 @@ export async function syncExtraOnlinkRoutes(ifaces: OnlinkIface[]): Promise<void
 }
 
 export function clearExtraOnlinkRoutes(): Promise<void> {
+  if (routesClosed) return Promise.resolve()
   return session.clear().catch((error) => {
     logger.warn('discovery on-link route clear failed', error)
   })
@@ -440,9 +470,10 @@ export function clearExtraOnlinkRoutes(): Promise<void> {
 
 /** Let the elevated helper remove routes after this process exits. Do not block quit. */
 export function signalExtraOnlinkRoutesStop(): void {
-  if (!helper) return
+  routesClosed = true
+  const stopPath = helper?.stopPath ?? join(routeDir(), 'stop')
   try {
-    writeFileSync(helper.stopPath, 'stop', 'utf8')
+    writeFileSync(stopPath, 'stop', 'utf8')
   } catch {
     // the helper also exits when this process is gone
   }

@@ -3,15 +3,17 @@
  * security hooks, and IPC wiring for content / updater / WinBox / monitoring / discovery.
  */
 import { app, shell, BrowserWindow, ipcMain, screen } from 'electron'
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { existsSync } from 'fs'
 import { release } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
+import { killTrackedChildren, trackChild } from './childProcesses'
+import { ROUTE_TASK_NAME } from './discoveryOnlinkRoute'
 import { setupUpdater, isQuittingForUpdate } from './updater'
 import { setupContentSync, getManifest, getArticleHtml } from './contentSync'
 import { setupWinbox } from './winbox'
 import { setupMonitoring } from './monitoring'
-import { setupDiscovery } from './discovery'
+import { setupDiscovery, shutdownDiscovery } from './discovery'
 import { isAllowedAppNavigation, isAllowedExternalUrl } from './safe'
 import { logger, setupProcessErrorHandlers } from './logger'
 
@@ -19,7 +21,10 @@ setupProcessErrorHandlers()
 
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
-  app.exit(0)
+  // app.exit() here also kills the already running instance on Windows, and Crashpad starts it again with no window.
+  app.whenReady().then(() => {
+    app.quit()
+  })
 }
 
 /** Та же графика, что и `build/icon.png` (знак LT) — для заголовка окна и dev. */
@@ -120,10 +125,12 @@ function applyWindows11RoundedCorners(mainWindow: BrowserWindow): Promise<void> 
     `[KnowHub.Dwm]::DwmSetWindowAttribute($hwnd, ${DWMWA_WINDOW_CORNER_PREFERENCE}, [ref]$pref, 4) | Out-Null`
   ].join('; ')
   return new Promise((resolve) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
-      windowsHide: true,
-      stdio: ['ignore', 'ignore', 'pipe']
-    })
+    const child = trackChild(
+      spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
+    )
     const timer = setTimeout(resolve, 4000)
     let stderr = ''
     child.stderr?.on('data', (chunk: Buffer | string) => {
@@ -258,6 +265,49 @@ function registerIpcHandlers(): void {
   setupDiscovery()
 }
 
+let appQuitting = false
+
+function forceStopWindowsProcess(): void {
+  try {
+    spawnSync('schtasks.exe', ['/End', '/TN', ROUTE_TASK_NAME], {
+      windowsHide: true,
+      timeout: 4000
+    })
+  } catch {
+    // the task may not exist yet
+  }
+  const args = app.isPackaged
+    ? ['/F', '/T', '/IM', basename(process.execPath)]
+    : ['/F', '/T', '/PID', String(process.pid)]
+  try {
+    spawnSync('taskkill.exe', args, { windowsHide: true, timeout: 5000 })
+  } catch {
+    // already exiting
+  }
+  app.exit(0)
+}
+
+function requestQuit(): void {
+  if (appQuitting) return
+  appQuitting = true
+  if (isQuittingForUpdate()) return
+  shutdownDiscovery()
+  killTrackedChildren()
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.removeAllListeners('close')
+      if (!win.isDestroyed()) win.destroy()
+    } catch {
+      // already gone
+    }
+  }
+  if (process.platform === 'win32') {
+    forceStopWindowsProcess()
+    return
+  }
+  app.quit()
+}
+
 if (gotTheLock) {
   app.whenReady().then(() => {
     if (process.platform === 'win32') {
@@ -267,6 +317,7 @@ if (gotTheLock) {
     registerIpcHandlers()
 
     const showMainWindow = (): void => {
+      if (appQuitting || isQuittingForUpdate()) return
       const windows = BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed())
       const existing = windows[0]
       if (!existing) {
@@ -285,17 +336,21 @@ if (gotTheLock) {
     })
 
     app.on('activate', function () {
-      if (isQuittingForUpdate()) return
+      if (appQuitting || isQuittingForUpdate()) return
       if (BrowserWindow.getAllWindows().length === 0) {
         const win = createWindow()
         setupWindowServices(win)
       }
     })
   })
-}
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
+  app.on('before-quit', () => {
+    appQuitting = true
+    shutdownDiscovery()
+    killTrackedChildren()
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') requestQuit()
+  })
+}

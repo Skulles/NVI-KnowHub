@@ -876,6 +876,23 @@ function stopWatch(): void {
   void clearExtraOnlinkRoutes()
 }
 
+/** Abort the scan and tell the route helper to exit. Must not wait or cancel app quit. */
+export function shutdownDiscovery(): void {
+  if (watch) {
+    watch.controller.abort()
+    if (watch.staleTimer) clearInterval(watch.staleTimer)
+    for (const socket of watch.sockets) closeSocket(socket)
+    watch = null
+  }
+  activeScan?.abort()
+  activeScan = null
+  if (publishTimer) {
+    clearTimeout(publishTimer)
+    publishTimer = null
+  }
+  signalExtraOnlinkRoutesStop()
+}
+
 async function startWatch(): Promise<DiscoveryScanResult> {
   if (watch) return { ok: true, devices: snapshotWatch(), watching: true }
   const controller = new AbortController()
@@ -926,7 +943,7 @@ async function runDiscoveryScan(): Promise<DiscoveryScanResult> {
 
 export function setupDiscovery(): void {
   app.on('will-quit', () => {
-    signalExtraOnlinkRoutesStop()
+    shutdownDiscovery()
   })
   ipcMain.handle('discovery:scan', async (): Promise<DiscoveryScanResult> => runDiscoveryScan())
   ipcMain.handle('discovery:watch', async (): Promise<DiscoveryScanResult> => startWatch())

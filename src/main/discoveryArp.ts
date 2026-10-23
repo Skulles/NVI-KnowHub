@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
+import { trackChild } from './childProcesses'
 import { collectOfflinkExtraTargets, type OnlinkIface } from './discoveryOnlink'
 import { isIPv4 } from './discoveryMndp'
 import { normalizeMacString } from './discoveryWs'
@@ -120,10 +121,12 @@ function streamPowerShell(
 ): Promise<void> {
   if (signal.aborted) return Promise.resolve()
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
-      { windowsHide: true }
+    const child = trackChild(
+      spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
+        { windowsHide: true }
+      )
     )
     let buffer = ''
     const take = (chunk: Buffer | string): void => {
