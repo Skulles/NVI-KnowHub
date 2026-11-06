@@ -5,6 +5,19 @@ import {
 } from "../winboxConfigStorage";
 import { MIKROTIK_CONFIG_DEVICES } from "../winboxDevices";
 
+function latestConfigPerDevice(
+  configs: SavedMikrotikConfig[],
+): SavedMikrotikConfig[] {
+  const seen = new Set<string>();
+  const latest: SavedMikrotikConfig[] = [];
+  for (const config of configs) {
+    if (seen.has(config.deviceId)) continue;
+    seen.add(config.deviceId);
+    latest.push(config);
+  }
+  return latest;
+}
+
 export interface SavedConfigGroup {
   owlDigits: string;
   configs: SavedMikrotikConfig[];
@@ -42,10 +55,13 @@ export function SavedConfigsList({
             </p>
 
             <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
-              {group.configs.map((config) => {
+              {latestConfigPerDevice(group.configs).map((config) => {
                 const device = MIKROTIK_CONFIG_DEVICES.find(
                   (candidate) => candidate.id === config.deviceId,
                 );
+                const versionCount = group.configs.filter(
+                  (item) => item.deviceId === config.deviceId,
+                ).length;
                 return (
                   <li key={config.id}>
                     <button
@@ -66,8 +82,15 @@ export function SavedConfigsList({
                         <RouterIcon className="h-5 w-5 shrink-0 text-label-tertiary" />
                       )}
                       <span className="flex min-w-0 flex-col gap-0.5">
-                        <span className="max-w-[8.5rem] truncate text-[13px] font-semibold leading-tight tracking-tight text-label-primary">
-                          {config.deviceLabel}
+                        <span className="flex min-w-0 items-baseline gap-1 text-[13px] font-semibold leading-tight tracking-tight text-label-primary">
+                          <span className="max-w-[8.5rem] truncate">
+                            {config.deviceLabel}
+                          </span>
+                          {versionCount > 1 && (
+                            <span className="shrink-0 font-medium text-label-tertiary">
+                              · {versionCount}
+                            </span>
+                          )}
                         </span>
                         <span className="text-[12px] font-medium leading-tight tracking-tight text-label-tertiary">
                           {formatConfigSavedAt(config.updatedAt)}

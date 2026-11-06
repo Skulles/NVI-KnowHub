@@ -69,7 +69,7 @@ export function AboutDialog({
               role="link"
               tabIndex={0}
               data-about-email=""
-              className="select-text cursor-pointer text-tint-blue hover:text-tint-blue-hover underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 rounded-sm"
+              className="select-text cursor-pointer text-tint-blue hover:text-tint-blue-hover hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 rounded-sm"
               onMouseDown={() => {
                 const selection = window.getSelection()
                 selectionBeforeEmailClick.current =
@@ -100,7 +100,7 @@ export function AboutDialog({
               Права Windows при поиске устройств
             </h3>
             <p className="m-0 text-label-tertiary">
-              При первом поиске права запрашивает PowerShell. Нужно,
+              При первом поиске устройств, права запрашивает PowerShell. Нужно,
               чтобы на время увидеть устройства в соседних сетях. Когда поиск заканчивается, сеть восстанавливается до прежнего состояния.
             </p>
           </section>

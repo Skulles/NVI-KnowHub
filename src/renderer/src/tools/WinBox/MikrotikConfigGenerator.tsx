@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useContentStore } from "../../store/content";
 import {
   downloadTextFile,
   groupConfigsByOwlId,
   loadWinboxConfigs,
   removeSavedConfig,
   saveWinboxConfigs,
-  upsertSavedConfig,
+  appendSavedConfig,
   type SavedConfigRole,
   type SavedMikrotikConfig,
 } from "./winboxConfigStorage";
@@ -53,6 +54,7 @@ import {
 } from "./routeros/routerOsShared";
 import { ConfigGeneratorModal } from "./components/ConfigGeneratorModal";
 import { DeviceConfigGrid } from "./components/DeviceConfigGrid";
+import { DevicePrepArticleLink } from "./components/ConfigFormControls";
 import { SavedConfigModal } from "./components/SavedConfigModal";
 import { SavedConfigsList } from "./components/SavedConfigsList";
 
@@ -357,7 +359,7 @@ export function MikrotikConfigGenerator() {
   const persistSavedConfig = useCallback(
     (entry: Omit<SavedMikrotikConfig, "id" | "createdAt" | "updatedAt">) => {
       setSavedConfigs((prev) => {
-        const next = upsertSavedConfig(prev, entry);
+        const next = appendSavedConfig(prev, entry);
         saveWinboxConfigs({ configs: next });
         return next;
       });
@@ -468,9 +470,20 @@ export function MikrotikConfigGenerator() {
       saveWinboxConfigs({ configs: next });
       return next;
     });
-    setViewingConfig((current) => (current?.id === id ? null : current));
+    setViewingConfig((current) => {
+      if (current?.id !== id) return current;
+      const sibling = savedConfigs
+        .filter(
+          (item) =>
+            item.id !== id &&
+            item.owlDigits === current.owlDigits &&
+            item.deviceId === current.deviceId,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      return sibling ?? null;
+    });
     setCopiedConfigId((current) => (current === id ? null : current));
-  }, []);
+  }, [savedConfigs]);
 
   const handleDownloadSavedConfig = useCallback(
     (config: SavedMikrotikConfig) => {
@@ -513,9 +526,23 @@ export function MikrotikConfigGenerator() {
     () => groupConfigsByOwlId(savedConfigs),
     [savedConfigs],
   );
+  const viewingVersions = useMemo(() => {
+    if (!viewingConfig) return [];
+    return savedConfigs
+      .filter(
+        (item) =>
+          item.owlDigits === viewingConfig.owlDigits &&
+          item.deviceId === viewingConfig.deviceId,
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [savedConfigs, viewingConfig]);
   const viewingCopied =
     viewingConfig != null && copiedConfigId === viewingConfig.id;
   const anyModalOpen = modalOpen || viewingConfig != null;
+  const toolVisible = useContentStore(
+    (state) =>
+      state.selectedItem?.type === "tool" && state.selectedItem.toolId === "winbox",
+  );
   const resetGeneratorState = useCallback(
     (initialStep: "input" | "settings" = "input") => {
       setPrimaryScript("");
@@ -574,16 +601,16 @@ export function MikrotikConfigGenerator() {
   }, [resetGeneratorState]);
 
   useEffect(() => {
-    if (!anyModalOpen) return;
+    if (!anyModalOpen || !toolVisible) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [anyModalOpen]);
+  }, [anyModalOpen, toolVisible]);
 
   useEffect(() => {
-    if (!anyModalOpen) return;
+    if (!anyModalOpen || !toolVisible) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
       if (viewingConfig) {
@@ -594,7 +621,7 @@ export function MikrotikConfigGenerator() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [anyModalOpen, viewingConfig, closeViewingConfig, closeModal]);
+  }, [anyModalOpen, toolVisible, viewingConfig, closeViewingConfig, closeModal]);
 
   const modal = (
     <ConfigGeneratorModal
@@ -672,9 +699,11 @@ export function MikrotikConfigGenerator() {
   const viewingModal = (
     <SavedConfigModal
       config={viewingConfig}
+      versions={viewingVersions}
       previewRole={viewingPreviewRole}
       copied={viewingCopied}
       onPreviewRoleChange={setViewingPreviewRole}
+      onSelectVersion={openSavedConfig}
       onClose={closeViewingConfig}
       onDelete={handleDeleteSavedConfig}
       onDownload={handleDownloadSavedConfig}
@@ -689,8 +718,8 @@ export function MikrotikConfigGenerator() {
           Генератор конфигов
         </h2>
         <p className="mt-2 mb-0 text-[13px] leading-relaxed text-label-tertiary">
-          Перед применением конфигов необходимо сбросить настройки устройства до
-          заводских с удалением конфигурации по умолчанию.
+          Перед применением конфигов необходимо выполнить{" "}
+          <DevicePrepArticleLink>сброс настроек по умолчанию</DevicePrepArticleLink>.
         </p>
       </header>
 
@@ -702,8 +731,8 @@ export function MikrotikConfigGenerator() {
         groups={groupedSavedConfigs}
         onOpenConfig={openSavedConfig}
       />
-      {modal}
-      {viewingModal}
+      {toolVisible && modal}
+      {toolVisible && viewingModal}
     </section>
   );
 }

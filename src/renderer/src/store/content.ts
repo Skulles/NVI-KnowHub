@@ -17,11 +17,13 @@ interface ContentStore {
   selectedItem: ContentItem | null
   articleHtml: string | null
   loading: boolean
+  /** Куда вернуться, если статью открыли из другого экрана. */
+  articleReturnItem: ContentItem | null
   /** Не null — показывать прогресс рядом с «Инструкции» */
   instructionsRefresh: InstructionsRefreshTiming | null
   setManifest: (manifest: ContentManifest | null) => void
   setInstructionsRefresh: (timing: InstructionsRefreshTiming | null) => void
-  selectItem: (item: ContentItem) => Promise<void>
+  selectItem: (item: ContentItem, options?: { returnTo?: ContentItem | null }) => Promise<void>
 }
 
 // Tools are defined in code — never in any manifest JSON, so they can't disappear on sync.
@@ -123,28 +125,32 @@ export const useContentStore = create<ContentStore>((set) => ({
   selectedItem: null,
   articleHtml: null,
   loading: false,
+  articleReturnItem: null,
   instructionsRefresh: null,
 
   setManifest: (manifest) => set({ manifest }),
   setInstructionsRefresh: (instructionsRefresh) => set({ instructionsRefresh }),
 
-  selectItem: async (item) => {
+  selectItem: async (item, options) => {
     const { selectedItem } = useContentStore.getState()
     const isSameItem = selectedItem?.id === item.id
+    const articleReturnItem = options?.returnTo ?? null
     saveLastSelectedItemId(item.id)
 
     if (item.type === 'tool') {
-      set({ selectedItem: item, articleHtml: null, loading: false })
+      set({ selectedItem: item, articleHtml: null, loading: false, articleReturnItem })
       return
     }
 
     if (!item.htmlFile) {
-      set({ selectedItem: item, loading: false })
+      set({ selectedItem: item, loading: false, articleReturnItem })
       return
     }
 
     if (!isSameItem) {
-      set({ selectedItem: item, articleHtml: null, loading: true })
+      set({ selectedItem: item, articleHtml: null, loading: true, articleReturnItem })
+    } else {
+      set({ articleReturnItem })
     }
 
     const html = window.api ? await window.api.getArticleHtml(item.htmlFile) : null

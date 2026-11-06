@@ -1,13 +1,16 @@
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownTrayIcon,
   CheckIcon,
+  ChevronRightIcon,
   ClipboardDocumentIcon,
   RouterIcon,
   XMarkIcon,
 } from "../../../components/Icons";
 import { CONFIG_REBOOT_NOTE } from "../routeros/lteIpsecConfig";
 import {
+  formatConfigSavedAt,
   getSavedConfigHeaderText,
   getSavedConfigPreviewText,
   getSavedConfigRoleLabels,
@@ -18,7 +21,7 @@ import {
 } from "../winboxConfigStorage";
 import { MIKROTIK_CONFIG_DEVICES } from "../winboxDevices";
 import {
-  CONFIG_APPLY_INSTRUCTION,
+  ConfigApplyInstruction,
   ModalFooter,
   SegmentToggle,
   fieldControlClass,
@@ -26,20 +29,120 @@ import {
 
 export interface SavedConfigModalProps {
   config: SavedMikrotikConfig | null;
+  versions: SavedMikrotikConfig[];
   previewRole: SavedConfigRole;
   copied: boolean;
   onPreviewRoleChange: (role: SavedConfigRole) => void;
+  onSelectVersion: (config: SavedMikrotikConfig) => void;
   onClose: () => void;
   onDelete: (configId: string) => void;
   onDownload: (config: SavedMikrotikConfig) => void;
   onCopyPreview: (text: string, configId: string) => Promise<void>;
 }
 
+function versionChoiceLabels(versions: SavedMikrotikConfig[]): Map<string, string> {
+  return new Map(
+    versions.map((version) => [version.id, formatConfigSavedAt(version.updatedAt)]),
+  );
+}
+
+function VersionPicker({
+  versions,
+  currentId,
+  onSelect,
+}: {
+  versions: SavedMikrotikConfig[];
+  currentId: string;
+  onSelect: (config: SavedMikrotikConfig) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const labels = versionChoiceLabels(versions);
+  const currentLabel = labels.get(currentId) ?? "";
+
+  useEffect(() => {
+    setOpen(false);
+  }, [currentId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: MouseEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Дата сохранения"
+        onClick={() => setOpen((value) => !value)}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium tabular-nums shadow-chromeTop transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+          open
+            ? "bg-surface-input text-label-primary"
+            : "bg-surface-input/80 text-label-secondary hover:text-label-primary"
+        }`}
+      >
+        <span>{currentLabel}</span>
+        <ChevronRightIcon
+          className={`h-3.5 w-3.5 shrink-0 text-label-tertiary transition-transform duration-200 ${
+            open ? "-rotate-90" : "rotate-90"
+          }`}
+        />
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Сохранённые версии"
+          className="absolute right-0 top-[calc(100%+0.4rem)] z-20 m-0 max-h-60 w-max min-w-full list-none overflow-y-auto rounded-xl border border-surface-border/90 bg-surface-card p-1 shadow-sheet"
+        >
+          {versions.map((version) => {
+            const selected = version.id === currentId;
+            return (
+              <li key={version.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => onSelect(version)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left text-[13px] font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/50 ${
+                    selected
+                      ? "bg-tint-blue/15 text-label-primary"
+                      : "text-label-secondary hover:bg-white/[0.05] hover:text-label-primary"
+                  }`}
+                >
+                  <span>{labels.get(version.id)}</span>
+                  {selected && <CheckIcon className="h-3.5 w-3.5 shrink-0 text-tint-blue" />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function SavedConfigModal({
   config,
+  versions,
   previewRole,
   copied,
   onPreviewRoleChange,
+  onSelectVersion,
   onClose,
   onDelete,
   onDownload,
@@ -71,7 +174,7 @@ export function SavedConfigModal({
         aria-labelledby="saved-mikrotik-config-modal-title"
         className="relative z-[1] flex max-h-[min(90vh,780px)] w-full max-w-[36rem] flex-col overflow-hidden rounded-[1.25rem] border border-surface-border/90 bg-surface-card shadow-sheet"
       >
-        <header className="relative flex shrink-0 items-center gap-3 overflow-hidden border-b border-surface-border/80 px-5 py-4">
+        <header className="relative z-10 flex shrink-0 items-center gap-3 border-b border-surface-border/80 px-5 py-4">
           <div
             className="pointer-events-none absolute inset-0 bg-gradient-to-br from-tint-blue/[0.08] via-transparent to-transparent"
             aria-hidden
@@ -94,11 +197,18 @@ export function SavedConfigModal({
             </p>
             <h3
               id="saved-mikrotik-config-modal-title"
-              className="m-0 mt-0.5 text-[17px] font-semibold leading-snug tracking-tight text-label-primary"
+              className="m-0 mt-0.5 truncate text-[17px] font-semibold leading-snug tracking-tight text-label-primary"
             >
               {config.deviceLabel}
             </h3>
           </div>
+          {versions.length > 1 && (
+            <VersionPicker
+              versions={versions}
+              currentId={config.id}
+              onSelect={onSelectVersion}
+            />
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -122,7 +232,7 @@ export function SavedConfigModal({
                 </pre>
               ) : null}
               <span className="text-[13px] leading-relaxed text-label-tertiary">
-                {CONFIG_APPLY_INSTRUCTION}
+                <ConfigApplyInstruction />
               </span>
               {savedConfigHasRoleTabs(config) && (
                 <SegmentToggle<SavedConfigRole>

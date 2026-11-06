@@ -1,5 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { flattenManifestItems } from "@shared/manifest";
+import { useContentStore } from "../../../store/content";
 import type {
   GrooveaWirelessBand,
   GrooveaWirelessProtocol,
@@ -7,8 +9,44 @@ import type {
 } from "../winboxConfigTypes";
 import { buildWirelessLinkNote } from "../routeros/wirelessLinkConfig";
 
-export const CONFIG_APPLY_INSTRUCTION =
-  "Вставьте команды в терминал устройства (можно все сразу), предварительно выполнив на нём сброс без настроек по умолчанию";
+const DEVICE_PREP_ARTICLE_ID = "article-1781512786412";
+
+export function DevicePrepArticleLink({
+  children,
+}: {
+  children: ReactNode;
+}): React.ReactElement {
+  const manifest = useContentStore((state) => state.manifest);
+  const selectItem = useContentStore((state) => state.selectItem);
+  const article = manifest
+    ? flattenManifestItems(manifest).find((item) => item.id === DEVICE_PREP_ARTICLE_ID)
+    : undefined;
+
+  if (!article) return <>{children}</>;
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const from = useContentStore.getState().selectedItem;
+        void selectItem(article, { returnTo: from });
+      }}
+      className="text-tint-blue opacity-[0.68] underline-offset-2 transition-[color,opacity] hover:opacity-[0.88] hover:underline focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 rounded-sm"
+    >
+      {children}
+    </button>
+  );
+}
+
+export function ConfigApplyInstruction(): React.ReactElement {
+  return (
+    <>
+      Вставьте команды в терминал устройства (можно все сразу), предварительно
+      выполнив на нём{" "}
+      <DevicePrepArticleLink>сброс настроек по умолчанию</DevicePrepArticleLink>.
+    </>
+  );
+}
 
 export function IpOctetInput({
   value,

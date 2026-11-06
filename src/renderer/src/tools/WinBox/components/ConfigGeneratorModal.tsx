@@ -25,7 +25,7 @@ import { isPairLinkStack } from "../routeros/wirelessLinkConfig";
 import {
   BtnPrimary,
   BtnSecondary,
-  CONFIG_APPLY_INSTRUCTION,
+  ConfigApplyInstruction,
   FieldLabel,
   FormAlert,
   GrooveaWirelessSettings,
@@ -719,7 +719,7 @@ export function ConfigGeneratorModal({
                 <div className={`flex flex-col ${isGroovea ? "gap-4" : "gap-0"}`}>
                   <div className="flex flex-col gap-2">
                     <span className="text-[13px] leading-relaxed text-label-tertiary">
-                      {CONFIG_APPLY_INSTRUCTION}
+                      <ConfigApplyInstruction />
                     </span>
                     {isGroovea && (
                       <SegmentToggle<GrooveaRole>

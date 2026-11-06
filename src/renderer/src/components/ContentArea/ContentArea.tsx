@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useLayoutEffect, useState } from 'react'
+import { ChevronRightIcon } from '../Icons'
 import { attachArticleCodeCopyButtons } from '../../lib/article-code-copy'
 import { sanitizeArticleHtml } from '../../lib/sanitize-article-html'
 import { attachArticleCodeHints } from '../../lib/article-code-hints'
@@ -127,6 +128,23 @@ function attachArticleMedia(container: HTMLElement): () => void {
   return () => cleanups.forEach((fn) => fn())
 }
 
+function ArticleBackButton(): React.ReactElement | null {
+  const returnTo = useContentStore((state) => state.articleReturnItem)
+  const selectItem = useContentStore((state) => state.selectItem)
+  if (!returnTo) return null
+
+  return (
+    <button
+      type="button"
+      onClick={() => void selectItem(returnTo)}
+      className="-ml-2 mb-6 inline-flex items-center gap-2 rounded-xl px-3 py-2 text-[17px] font-semibold text-label-primary transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45"
+    >
+      <ChevronRightIcon className="h-5 w-5 rotate-180" />
+      Назад
+    </button>
+  )
+}
+
 function ArticleDocument({ html, title }: { html: string; title: string }): React.ReactElement {
   const { leadInner, bodyHtml } = useMemo(() => parseArticleHtml(html), [html])
   const bodySplit = useMemo(() => splitBodyAtFirstHeading(bodyHtml), [bodyHtml])
@@ -140,6 +158,7 @@ function ArticleDocument({ html, title }: { html: string; title: string }): Reac
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,46rem)_11rem] xl:justify-center">
         <div ref={contentWrapperRef} className="article-view min-w-0">
           <header className="mb-9 px-0.5">
+            <ArticleBackButton />
             <h1 className="text-[2rem] font-semibold tracking-[-0.032em] leading-[1.15] text-label-primary">{title}</h1>
             {leadInner && (
               <p
@@ -213,6 +232,7 @@ function ArticleLoadingSkeleton({ title }: { title: string }): React.ReactElemen
     >
       <div className="min-w-0">
         <header className="mb-9 px-0.5">
+          <ArticleBackButton />
           <h1 className="text-[2rem] font-semibold tracking-[-0.032em] leading-[1.15] text-label-primary">
             {title}
           </h1>
@@ -279,7 +299,7 @@ function LoadingState(): React.ReactElement {
 }
 
 export function ContentArea(): React.ReactElement {
-  const { selectedItem, articleHtml, loading } = useContentStore()
+  const { selectedItem, articleHtml, loading, articleReturnItem } = useContentStore()
   const scrollRootRef = useRef<HTMLElement>(null)
   const selectionKey = selectedItem?.id ?? null
   const monitoringSelected =
@@ -291,6 +311,13 @@ export function ContentArea(): React.ReactElement {
     selectedItem.toolId !== 'monitoring'
       ? selectedItem.toolId
       : null
+  const preservedToolId =
+    articleReturnItem?.type === 'tool' &&
+    articleReturnItem.toolId &&
+    articleReturnItem.toolId !== 'monitoring'
+      ? articleReturnItem.toolId
+      : null
+  const mountedToolId = otherToolId ?? preservedToolId
   const [monitoringKeepAlive, setMonitoringKeepAlive] = useState(false)
 
   useEffect(() => {
@@ -343,7 +370,11 @@ export function ContentArea(): React.ReactElement {
           </div>
         )}
 
-        {otherToolId && <ToolView toolId={otherToolId} />}
+        {mountedToolId && (
+          <div className={otherToolId ? undefined : 'hidden'} aria-hidden={!otherToolId}>
+            <ToolView toolId={mountedToolId} />
+          </div>
+        )}
       </div>
     </main>
   )

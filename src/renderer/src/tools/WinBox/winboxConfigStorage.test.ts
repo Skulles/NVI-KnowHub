@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildGrooveaAllConfigs,
+  buildGrooveaConfigHeader,
+  buildGrooveaSaveTxt,
+} from './routeros/wirelessLinkConfig'
+import {
+  appendSavedConfig,
   getSavedConfigHeaderText,
   getSavedConfigPreviewText,
   getSavedConfigRoles,
@@ -97,6 +103,122 @@ describe('legacy WinBox storage compatibility', () => {
       '/interface wireless set mode=station',
     )
     expect('localStorage' in globalThis).toBe(false)
+  })
+
+  it('keeps only the latest copy when the saved config is unchanged', () => {
+    const input = {
+      owlDigits: '1234',
+      deviceId: 'groovea-52-ac',
+      deviceLabel: 'GrooveA 52 ac',
+      fileName: 'owl1234-GrooveA52-config.txt',
+      content: 'same',
+      headerText: 'OWLGUARD ID: 1234',
+    }
+    const first = appendSavedConfig([], { ...input, id: 'first' })
+    const second = appendSavedConfig(first, { ...input, id: 'second' })
+
+    expect(second).toHaveLength(1)
+    expect(second[0]?.id).toBe('first')
+    expect(second[0]?.content).toBe('same')
+    expect(second[0]?.createdAt).toBe(first[0]?.createdAt)
+  })
+
+  it('treats a save that differs only by generated passwords as the same config', () => {
+    const input = {
+      owlDigits: '1234',
+      deviceId: 'ltap-mini-lte-kit',
+      deviceLabel: 'LtAP mini',
+      fileName: 'OWL1234-config.txt',
+      flow: 'lte-ipsec' as const,
+    }
+    const first = appendSavedConfig([], {
+      ...input,
+      id: 'first',
+      headerText: 'OWLGUARD ID: 1234\nПароль: AAA-111\nWiFi пароль: AAA-111',
+      previewCommands: '/user set admin password=AAA-111\nwpa2-pre-shared-key="AAA-111"',
+      content: 'Пароль: AAA-111\n/user set admin password=AAA-111',
+    })
+    const second = appendSavedConfig(first, {
+      ...input,
+      id: 'second',
+      headerText: 'OWLGUARD ID: 1234\nПароль: BBB-222\nWiFi пароль: BBB-222',
+      previewCommands: '/user set admin password=BBB-222\nwpa2-pre-shared-key="BBB-222"',
+      content: 'Пароль: BBB-222\n/user set admin password=BBB-222',
+    })
+
+    expect(second).toHaveLength(1)
+    expect(second[0]?.id).toBe('first')
+    expect(second[0]?.content).toContain('BBB-222')
+  })
+
+  it('keeps one GrooveA save when only the generated link key and admin password change', () => {
+    const build = (adminPassword: string, linkKey: string) => {
+      const hosts = ['10.12.34.210', '10.12.34.211', '10.12.34.212']
+      const header = buildGrooveaConfigHeader(
+        '1234',
+        hosts,
+        adminPassword,
+        'nv2',
+        '5 ГГц',
+        linkKey,
+        'legacy',
+      )
+      const roleConfigs = buildGrooveaAllConfigs({
+        owlDigits: '1234',
+        nameSlug: 'GrooveA52',
+        ssid: 'owl1234-GrooveA52',
+        hosts,
+        net: '10.12.34.0',
+        newPassword: adminPassword,
+        protocol: 'nv2',
+        band: '5 ГГц',
+        linkKey,
+        wirelessStack: 'legacy',
+      })
+      return {
+        headerText: `OWLGUARD ID: 1234\nЛогин: admin\nПароль: ${adminPassword}`,
+        roleConfigs,
+        content: buildGrooveaSaveTxt(header, roleConfigs, {
+          ap: 'OWL1234-GrooveA52-ap',
+          station1: 'OWL1234-GrooveA52-station1',
+          station2: 'OWL1234-GrooveA52-station2',
+        }),
+      }
+    }
+    const input = {
+      owlDigits: '1234',
+      deviceId: 'groovea-52-ac',
+      deviceLabel: 'GrooveA 52 ac',
+      fileName: 'owl1234-GrooveA52-config.txt',
+      flow: 'groovea' as const,
+    }
+    const saved = ['AAA-111', 'BBB-222', 'CCC-333', 'DDD-444'].reduce(
+      (configs, secret, index) =>
+        appendSavedConfig(configs, {
+          ...input,
+          ...build(secret, `link-${secret}`),
+          id: `save-${index}`,
+        }),
+      [] as ReturnType<typeof appendSavedConfig>,
+    )
+
+    expect(saved).toHaveLength(1)
+    expect(saved[0]?.content).toContain('DDD-444')
+  })
+
+  it('keeps an earlier save when the same device is saved again', () => {
+    const input = {
+      owlDigits: '1234',
+      deviceId: 'groovea-52-ac',
+      deviceLabel: 'GrooveA 52 ac',
+      fileName: 'owl1234-GrooveA52-config.txt',
+      content: 'first',
+    }
+    const first = appendSavedConfig([], { ...input, id: 'first' })
+    const second = appendSavedConfig(first, { ...input, id: 'second', content: 'second' })
+
+    expect(second.map((config) => config.id)).toEqual(['second', 'first'])
+    expect(second.map((config) => config.content)).toEqual(['second', 'first'])
   })
 
   it('recovers legacy LtAP preview commands and inferred flow', () => {

@@ -105,6 +105,55 @@ export function parsePreviewCommandsFromContent(content: string): string | undef
   return undefined
 }
 
+/** Drop secrets that are generated again on every save. */
+function comparableConfigText(value: string | undefined): string {
+  if (!value) return ''
+  return value
+    .replace(/^(Пароль(?: администратора)?|WiFi пароль):\s*.+$/gim, '$1: *')
+    .replace(/(\/user set admin password=)\S+/g, '$1*')
+    .replace(
+      /(nv2-preshared-key|wpa2-pre-shared-key|security\.passphrase|(?<![\w-])password)="(?:\\.|[^"\\])*"/g,
+      '$1="*"',
+    )
+}
+
+function roleConfigsKey(value: Partial<Record<SavedConfigRole, string>> | undefined): string {
+  if (!value) return ''
+  return ROLE_KEYS.map((role) => comparableConfigText(value[role])).join('\0')
+}
+
+/** Same OWL, device, and settings. Generated passwords and link keys are ignored. */
+function sameSavedConfigBody(
+  a: Pick<
+    SavedMikrotikConfig,
+    'owlDigits' | 'deviceId' | 'content' | 'flow' | 'headerText' | 'previewCommands' | 'roleConfigs'
+  >,
+  b: Pick<
+    SavedMikrotikConfig,
+    'owlDigits' | 'deviceId' | 'content' | 'flow' | 'headerText' | 'previewCommands' | 'roleConfigs'
+  >,
+): boolean {
+  return (
+    a.owlDigits === b.owlDigits &&
+    a.deviceId === b.deviceId &&
+    comparableConfigText(a.content) === comparableConfigText(b.content) &&
+    (a.flow ?? '') === (b.flow ?? '') &&
+    comparableConfigText(a.headerText) === comparableConfigText(b.headerText) &&
+    comparableConfigText(a.previewCommands) === comparableConfigText(b.previewCommands) &&
+    roleConfigsKey(a.roleConfigs) === roleConfigsKey(b.roleConfigs)
+  )
+}
+
+function keepLatestUniqueConfigs(configs: SavedMikrotikConfig[]): SavedMikrotikConfig[] {
+  const newestFirst = [...configs].sort((a, b) => b.updatedAt - a.updatedAt)
+  const unique: SavedMikrotikConfig[] = []
+  for (const config of newestFirst) {
+    if (unique.some((item) => sameSavedConfigBody(item, config))) continue
+    unique.push(config)
+  }
+  return unique
+}
+
 function normalizeConfigs(value: unknown): SavedMikrotikConfig[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
@@ -153,7 +202,7 @@ function normalizeConfigs(value: unknown): SavedMikrotikConfig[] {
     })
   }
 
-  return configs
+  return keepLatestUniqueConfigs(configs)
 }
 
 export function parseWinboxConfigSnapshot(value: unknown): WinboxConfigSnapshot {
@@ -179,16 +228,12 @@ export function saveWinboxConfigs(snapshot: WinboxConfigSnapshot): void {
   }
 }
 
-/** Upsert by owlDigits + deviceId: regenerating replaces the previous config for that pair. */
-export function upsertSavedConfig(
+/** Keep a new version only when it differs. An identical save replaces the previous copy. */
+export function appendSavedConfig(
   configs: SavedMikrotikConfig[],
   input: Omit<SavedMikrotikConfig, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
 ): SavedMikrotikConfig[] {
   const now = Date.now()
-  const existingIndex = configs.findIndex(
-    (item) => item.owlDigits === input.owlDigits && item.deviceId === input.deviceId,
-  )
-
   const nextEntry: SavedMikrotikConfig = {
     id: input.id ?? crypto.randomUUID(),
     owlDigits: input.owlDigits,
@@ -204,19 +249,16 @@ export function upsertSavedConfig(
     ...(input.roleConfigs ? { roleConfigs: input.roleConfigs } : {}),
   }
 
-  if (existingIndex >= 0) {
-    const existing = configs[existingIndex]
-    const next = [...configs]
-    next[existingIndex] = {
-      ...nextEntry,
-      id: existing.id,
-      createdAt: existing.createdAt,
-      updatedAt: now,
-    }
-    return next
-  }
+  const identical = configs.filter((item) => sameSavedConfigBody(item, nextEntry))
+  if (identical.length === 0) return [nextEntry, ...configs]
 
-  return [nextEntry, ...configs]
+  const earliest = identical.reduce((left, right) =>
+    left.createdAt <= right.createdAt ? left : right,
+  )
+  return [
+    { ...nextEntry, id: earliest.id, createdAt: earliest.createdAt, updatedAt: now },
+    ...configs.filter((item) => !sameSavedConfigBody(item, nextEntry)),
+  ]
 }
 
 export function removeSavedConfig(configs: SavedMikrotikConfig[], id: string): SavedMikrotikConfig[] {
@@ -248,11 +290,9 @@ export function formatConfigSavedAt(timestamp: number): string {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
     }).format(new Date(timestamp))
   } catch {
-    return new Date(timestamp).toLocaleString('ru-RU')
+    return new Date(timestamp).toLocaleDateString('ru-RU')
   }
 }
 
