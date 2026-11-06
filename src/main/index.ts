@@ -3,13 +3,12 @@
  * security hooks, and IPC wiring for content / updater / WinBox / monitoring / discovery.
  */
 import { app, shell, BrowserWindow, ipcMain, screen } from 'electron'
-import { spawn, spawnSync } from 'child_process'
+import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { release } from 'os'
-import { basename, join } from 'path'
+import { join } from 'path'
 import { killTrackedChildren, trackChild } from './childProcesses'
-import { ROUTE_TASK_NAME } from './discoveryOnlinkRoute'
-import { setupUpdater, isQuittingForUpdate } from './updater'
+import { setupUpdater, isQuittingForUpdate, suppressInstallOnQuit } from './updater'
 import { setupContentSync, getManifest, getArticleHtml } from './contentSync'
 import { setupWinbox } from './winbox'
 import { setupMonitoring } from './monitoring'
@@ -215,6 +214,10 @@ function createWindow(): BrowserWindow {
 
   attachWindowSecurity(mainWindow)
   attachWindowCorners(mainWindow)
+  mainWindow.on('close', () => {
+    if (process.platform === 'darwin') return
+    requestQuit()
+  })
 
   mainWindow.on('ready-to-show', () => {
     void applyWindows11RoundedCorners(mainWindow).finally(() => {
@@ -266,46 +269,50 @@ function registerIpcHandlers(): void {
 }
 
 let appQuitting = false
+let hardExitScheduled = false
 
-function forceStopWindowsProcess(): void {
+function scheduleHardExit(): void {
+  if (hardExitScheduled || isQuittingForUpdate()) return
+  hardExitScheduled = true
+  // taskkill /F on this process is an abnormal exit. Crashpad then starts a new KnowHub with no window,
+  // so the app looks like it never closed and the pid in Task Manager changes.
+  setImmediate(() => {
+    try {
+      app.releaseSingleInstanceLock()
+    } catch {
+      // already released
+    }
+    try {
+      app.exit(0)
+    } finally {
+      process.exit(0)
+    }
+  })
+}
+
+function stopBackgroundWork(): void {
+  if (isQuittingForUpdate() || appQuitting) return
+  appQuitting = true
   try {
-    spawnSync('schtasks.exe', ['/End', '/TN', ROUTE_TASK_NAME], {
-      windowsHide: true,
-      timeout: 4000
-    })
-  } catch {
-    // the task may not exist yet
+    shutdownDiscovery()
+  } catch (error) {
+    logger.warn('shutdown during quit failed', error)
   }
-  const args = app.isPackaged
-    ? ['/F', '/T', '/IM', basename(process.execPath)]
-    : ['/F', '/T', '/PID', String(process.pid)]
-  try {
-    spawnSync('taskkill.exe', args, { windowsHide: true, timeout: 5000 })
-  } catch {
-    // already exiting
-  }
-  app.exit(0)
+  killTrackedChildren()
 }
 
 function requestQuit(): void {
-  if (appQuitting) return
-  appQuitting = true
   if (isQuittingForUpdate()) return
-  shutdownDiscovery()
-  killTrackedChildren()
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      win.removeAllListeners('close')
-      if (!win.isDestroyed()) win.destroy()
-    } catch {
-      // already gone
-    }
-  }
-  if (process.platform === 'win32') {
-    forceStopWindowsProcess()
+  // NSIS would relaunch the app while this process is still exiting.
+  if (process.platform === 'win32') suppressInstallOnQuit()
+  stopBackgroundWork()
+  if (process.platform !== 'win32') {
+    app.quit()
     return
   }
-  app.quit()
+  // The window is already closing. Destroying it from this handler crashes the process,
+  // and Crashpad starts a new one. Exit on the next turn, after the close finishes.
+  scheduleHardExit()
 }
 
 if (gotTheLock) {
@@ -345,9 +352,10 @@ if (gotTheLock) {
   })
 
   app.on('before-quit', () => {
-    appQuitting = true
-    shutdownDiscovery()
-    killTrackedChildren()
+    if (isQuittingForUpdate()) return
+    if (process.platform === 'win32') suppressInstallOnQuit()
+    stopBackgroundWork()
+    if (process.platform === 'win32') scheduleHardExit()
   })
 
   app.on('window-all-closed', () => {

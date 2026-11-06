@@ -1,4 +1,4 @@
-import type { ChildProcess } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 
 const children = new Set<ChildProcess>()
 
@@ -13,13 +13,29 @@ export function trackChild(child: ChildProcess): ChildProcess {
   return child
 }
 
-export function killTrackedChildren(): void {
-  for (const child of children) {
+function killChildTree(child: ChildProcess): void {
+  const pid = child.pid
+  // taskkill /T stops powershell runspaces. Never target this process: /F is a crash, and Crashpad starts it again.
+  if (process.platform === 'win32' && pid && pid !== process.pid) {
     try {
-      child.kill()
+      const killer = spawn('taskkill.exe', ['/F', '/T', '/PID', String(pid)], {
+        windowsHide: true,
+        stdio: 'ignore',
+        detached: true
+      })
+      killer.unref()
     } catch {
       // already exited
     }
   }
+  try {
+    child.kill()
+  } catch {
+    // already exited
+  }
+}
+
+export function killTrackedChildren(): void {
+  for (const child of children) killChildTree(child)
   children.clear()
 }

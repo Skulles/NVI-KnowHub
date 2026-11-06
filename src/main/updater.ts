@@ -22,6 +22,11 @@ export function isQuittingForUpdate(): boolean {
   return quittingForUpdate
 }
 
+/** A normal close must not launch NSIS. The installer starts KnowHub again before the old process is gone. */
+export function suppressInstallOnQuit(): void {
+  autoUpdater.autoInstallOnAppQuit = false
+}
+
 function send(channel: string, ...args: unknown[]): void {
   const window = targetWindow
   if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
