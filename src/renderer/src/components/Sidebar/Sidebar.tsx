@@ -3,6 +3,7 @@ import { useContentStore } from '../../store/content'
 import type { Section, ContentItem, Subsection } from '@shared/types'
 import { ArrowPathIcon, ChevronRightIcon, SectionIcon, ToolIcon } from '../Icons'
 import { KnowHubLogoMark } from '../Logo/KnowHubLogoMark'
+import { AboutDialog } from './AboutDialog'
 
 const focusRow =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tint-blue/45 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-sidebar'
@@ -143,12 +144,29 @@ export function Sidebar(): React.ReactElement {
   const manifest = useContentStore((s) => s.manifest)
   const selectedItem = useContentStore((s) => s.selectedItem)
   const selectItem = useContentStore((s) => s.selectItem)
+  const [version, setVersion] = React.useState('')
+  const [aboutOpen, setAboutOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    void window.api?.getAppVersion().then((value) => {
+      if (!cancelled && value) setVersion(value)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <aside className="sidebar flex flex-col h-full w-[268px] flex-shrink-0 select-none bg-surface-sidebar border-r border-surface-border">
       <div className="px-3.5 pt-4 pb-3.5 border-surface-border drag-region shrink-0">
-        <div className="flex items-center gap-3.5 no-drag">
-          <KnowHubLogoMark className="h-[52px] w-[52px] shrink-0 text-white" />
+        <button
+          type="button"
+          onClick={() => setAboutOpen(true)}
+          aria-label={version ? `О программе, версия ${version}` : 'О программе'}
+          className={`flex items-center gap-3.5 rounded-xl text-left text-white transition-opacity hover:opacity-90 no-drag ${focusRow}`}
+        >
+          <KnowHubLogoMark className="h-[52px] w-[52px] shrink-0" />
           <div className="min-w-0 flex-1 flex flex-col gap-1">
             <div className="grid w-max max-w-full">
               <span
@@ -165,7 +183,7 @@ export function Sidebar(): React.ReactElement {
               {BRAND_SUBTITLE}
             </div>
           </div>
-        </div>
+        </button>
       </div>
 
       <nav className="sidebar-scroll flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 scroll-smooth min-h-0">
@@ -184,6 +202,8 @@ export function Sidebar(): React.ReactElement {
           </div>
         )}
       </nav>
+
+      {aboutOpen && <AboutDialog version={version} onClose={() => setAboutOpen(false)} />}
     </aside>
   )
 }
